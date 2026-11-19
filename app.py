@@ -1,0 +1,248 @@
+import streamlit as st
+import pandas as pd
+from lead_assistant.database import Database
+from lead_assistant.config import settings
+from lead_assistant.llm import AnthropicDraftGenerator
+from lead_assistant.workflow import generate_and_save_draft
+from lead_assistant.nlp import analyze_conversation
+
+st.set_page_config(page_title="LeadPilot AI", page_icon="✉️", layout="wide")
+
+DEMO_USER_ID = "admin"
+DEMO_PASSWORD = "admin@123"
+
+st.session_state.setdefault("authenticated", False)
+if not st.session_state["authenticated"]:
+    with st.container(horizontal=True, horizontal_alignment="center"):
+        with st.container(width=560, border=True):
+            st.title(":rainbow[LeadPilot AI]", icon=":material/mark_email_unread:")
+            st.caption("Sign in to manage lead follow-ups and draft reviews.")
+            with st.form("login"):
+                user_id = st.text_input("User ID", value="admin")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Sign in", type="primary")
+            st.caption("Demo access only. Do not use these credentials for sensitive data.")
+            if submitted:
+                if user_id == DEMO_USER_ID and password == DEMO_PASSWORD:
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Invalid user ID or password.")
+    st.stop()
+
+
+@st.cache_resource
+def get_db():
+    db = Database(settings.database_path)
+    db.seed_sample_data()
+    return db
+
+
+db = get_db()
+st.title(":rainbow[LeadPilot AI]", icon=":material/mark_email_unread:")
+st.markdown(":blue[Intelligent lead follow-ups · NLP insights · Human-approved messaging]")
+leads, drafts = db.get_leads(), db.get_drafts()
+a,b,c,d = st.columns(4)
+a.metric("Total leads",len(leads))
+b.metric("History",sum(len(db.get_history(int(x))) for x in leads["lead_id"]) if not leads.empty else 0)
+c.metric("Drafts",len(drafts))
+d.metric("Queue",int((drafts.status=="Pending Approval").sum()) if not drafts.empty else 0)
+page = st.sidebar.radio("Workspace",["Dashboard","Lead Management","Generate Draft","Review Drafts","Programme Facts"])
+st.sidebar.caption("Synthetic demo data. No message is sent.")
+if st.sidebar.button("Sign out"):
+    st.session_state["authenticated"] = False
+    st.rerun()
+if page=="Dashboard":
+    st.subheader("Workspace overview")
+    x,y=st.columns([1.2,1])
+    x.markdown("#### Recent leads")
+    x.dataframe(leads[["lead_id","full_name","programme_interest","status"]] if not leads.empty else leads,width="stretch",hide_index=True)
+    y.markdown("#### Draft approval status")
+    if not drafts.empty:
+        y.bar_chart(
+            drafts.status.value_counts(),
+            alt="Draft count by approval status",
+        )
+    else:
+        y.info("No drafts yet.")
+    st.subheader("How each draft is prepared", icon=":material/account_tree:")
+    st.caption("AI drafts are saved for human review; nothing is sent automatically.")
+    workflow_steps = [
+        ("history", "Lead history"),
+        ("psychology", "NLP insights"),
+        ("verified", "Approved facts"),
+        ("smart_toy", "Anthropic Claude"),
+        ("fact_check", "Validation"),
+        ("database", "SQLite"),
+        ("rate_review", "Human review"),
+    ]
+    with st.container(horizontal=True, gap="small"):
+        for step_number, (icon, label) in enumerate(workflow_steps, start=1):
+            with st.container(width=160, border=True):
+                st.caption(f"STEP {step_number:02}")
+                st.markdown(f":material/{icon}:")
+                st.markdown(f"**{label}**")
+elif page=="Lead Management":
+    st.subheader("Add a new lead")
+    with st.form("lead"):
+        x,y=st.columns(2)
+        name=x.text_input("Full name *"); email=y.text_input("Email")
+        phone=x.text_input("Phone"); programme=y.text_input("Programme interest *",value="Data Analytics Career Programme")
+        if st.form_submit_button("Save lead",type="primary"):
+            try: st.success(f"Lead #{db.add_lead(name,email,phone,programme)} created."); st.rerun()
+            except Exception as e: st.error(str(e))
+    st.divider(); st.markdown("#### Add interaction")
+    if not leads.empty:
+        with st.form("interaction"):
+            lid=st.selectbox("Lead",leads.lead_id.tolist(),format_func=lambda z:f"#{z} — {leads.loc[leads.lead_id==z,'full_name'].iloc[0]}")
+            channel=st.selectbox("Channel",["WhatsApp","Email","Call","Web"])
+            direction=st.selectbox("Direction",["Inbound","Outbound"])
+            msg=st.text_area("Message / call notes")
+            if st.form_submit_button("Save interaction"):
+                try: db.add_interaction(int(lid),channel,msg,direction); st.success("Saved."); st.rerun()
+                except Exception as e: st.error(str(e))
+    st.markdown("#### Lead directory"); st.dataframe(leads,width="stretch",hide_index=True)
+elif page=="Generate Draft":
+    st.subheader("Create a personalized follow-up")
+    if leads.empty: st.warning("Add a lead first.")
+    else:
+        lid=st.selectbox("Select lead",leads.lead_id.tolist(),format_func=lambda z:f"#{z} — {leads.loc[leads.lead_id==z,'full_name'].iloc[0]}")
+        channel=st.radio("Draft channel",["Email","WhatsApp"],horizontal=True)
+        hist=db.get_history(int(lid))
+        history_signature = tuple(
+            (str(row.direction), str(row.message), str(row.occurred_at))
+            for row in hist.itertuples(index=False)
+        )
+        draft_context = (int(lid), channel, history_signature)
+        if st.session_state.get("latest_context") != draft_context:
+            st.session_state.pop("latest", None)
+            st.session_state.pop("latest_context", None)
+        with st.expander("Conversation history",expanded=True):
+            st.dataframe(hist[["channel","direction","message","occurred_at"]],width="stretch",hide_index=True)
+        nlp=analyze_conversation(hist.to_dict(orient="records"))
+        p,q,r=st.columns(3); p.metric("Stage",nlp["stage"]); q.metric("Preferences",len(nlp["preferences"])); r.metric("Open questions",len(nlp["unanswered_topics"]))
+        st.subheader("Conversation insights", icon=":material/insights:")
+        preference_column, topic_column, keyword_column = st.columns([1, 1.3, 1])
+        with preference_column.container(border=True):
+            st.markdown("**Preferences**")
+            if nlp["preferences"]:
+                with st.container(horizontal=True, gap="small"):
+                    for preference in nlp["preferences"]:
+                        st.badge(preference.replace("_", " ").title(), color="blue")
+            else:
+                st.caption("No preferences detected yet.")
+        with topic_column.container(border=True):
+            st.markdown("**Follow-up topics**")
+            mentioned_topics = set(nlp["mentioned_topics"])
+            answered_topics = set(nlp["answered_topics"])
+            unanswered_topics = set(nlp["unanswered_topics"])
+            with st.container(horizontal=True, gap="small"):
+                for topic in sorted(mentioned_topics | answered_topics | unanswered_topics):
+                    if topic in unanswered_topics:
+                        st.badge(f"{topic.title()} to follow up", color="orange")
+                    elif topic in answered_topics:
+                        st.badge(f"{topic.title()} answered", color="green")
+                    else:
+                        st.badge(f"{topic.title()} mentioned", color="blue")
+            if not mentioned_topics and not answered_topics and not unanswered_topics:
+                st.caption("No follow-up topics detected yet.")
+        with keyword_column.container(border=True):
+            st.markdown("**Conversation signals**")
+            if nlp["keywords"]:
+                with st.container(horizontal=True, gap="small"):
+                    for keyword in nlp["keywords"]:
+                        st.badge(keyword, color="gray")
+            else:
+                st.caption("No keywords detected yet.")
+            st.caption(f'{nlp["token_count"]} words analyzed')
+        with st.expander("Questions and topic details"):
+            if nlp["questions_detected"]:
+                st.markdown("**Questions detected**")
+                for question in nlp["questions_detected"]:
+                    st.write(question)
+            else:
+                st.caption("No direct questions detected.")
+            for label, topics, color in (
+                ("Mentioned topics", nlp["mentioned_topics"], "blue"),
+                ("Answered topics", nlp["answered_topics"], "green"),
+                ("Topics to follow up", nlp["unanswered_topics"], "orange"),
+            ):
+                st.markdown(f"**{label}**")
+                if topics:
+                    with st.container(horizontal=True, gap="small"):
+                        for topic in topics:
+                            st.badge(topic.title(), color=color)
+                else:
+                    st.caption(f"No {label.lower()} detected.")
+        if st.button("Generate AI draft",type="primary"):
+            st.session_state.pop("latest", None)
+            st.session_state.pop("latest_context", None)
+            try:
+                generator=AnthropicDraftGenerator(settings.anthropic_api_key,settings.anthropic_model)
+                with st.spinner("Calling Anthropic Claude..."):
+                    st.session_state["latest"]=generate_and_save_draft(db,int(lid),channel,generator)
+                    st.session_state["latest_context"] = draft_context
+                st.success("Draft saved as Pending Approval.")
+            except Exception as e: st.error(str(e))
+        output=st.session_state.get("latest")
+        if output:
+            draft = output["draft"]
+            metadata = output["metadata"]
+            st.subheader("Generated draft", icon=":material/draft:")
+            with st.container(border=True):
+                if draft.get("subject"):
+                    st.markdown("**Subject**")
+                    st.write(draft["subject"])
+                st.text_area(
+                    "Message for review",
+                    draft["message"],
+                    height=220,
+                    disabled=True,
+                )
+                provider_column, model_column = st.columns(2)
+                provider_column.caption("Provider")
+                provider_column.write(metadata["provider"])
+                model_column.caption("Model")
+                model_column.write(metadata["model"])
+                st.markdown("**Approved fact references**")
+                if draft["fact_ids_used"]:
+                    for fact_id in draft["fact_ids_used"]:
+                        st.badge(f"Fact #{fact_id}", color="blue")
+                else:
+                    st.caption("No approved programme facts were cited.")
+                st.markdown("**Reviewer notes**")
+                if draft["review_notes"]:
+                    for note in draft["review_notes"]:
+                        st.write(note)
+                else:
+                    st.caption("No additional review notes.")
+            st.warning("Saved draft only. Human approval is required. Nothing has been sent.")
+elif page=="Review Drafts":
+    st.subheader("Human review queue"); drafts=db.get_drafts()
+    if drafts.empty: st.info("No drafts available.")
+    else:
+        st.dataframe(drafts[["draft_id","full_name","channel","status","provider","model","created_at"]],width="stretch",hide_index=True)
+        pending=drafts[drafts.status=="Pending Approval"]
+        if not pending.empty:
+            did=st.selectbox("Pending draft",pending.draft_id.tolist())
+            row=drafts[drafts.draft_id==did].iloc[0]
+            st.text_area("Draft content",row.message_body,height=200,disabled=True)
+            feedback=st.text_area("Reviewer feedback")
+            x,y,z=st.columns(3)
+            if x.button("Approve",type="primary"): db.review_draft(int(did),"Approved",feedback); st.success("Approved."); st.rerun()
+            if y.button("Needs changes"): db.review_draft(int(did),"Needs Changes",feedback); st.rerun()
+            if z.button("Reject"): db.review_draft(int(did),"Rejected",feedback); st.rerun()
+        else: st.info("No pending drafts.")
+elif page=="Programme Facts":
+    st.subheader("Approved programme knowledge base")
+    st.caption("Only approved facts are passed to the LLM. Use verified, trainer-approved information.")
+    with st.form("fact"):
+        prog=st.text_input("Programme",value="Data Analytics Career Programme")
+        cat=st.selectbox("Category",["Audience","Schedule","Fees","Duration","Eligibility","Learning support","Placement","Recording","Other"])
+        fact=st.text_area("Approved fact")
+        if st.form_submit_button("Add approved fact"):
+            try: db.add_fact(prog,cat,fact,True); st.success("Added."); st.rerun()
+            except Exception as e: st.error(str(e))
+    with db.connect() as conn:
+        facts=pd.read_sql_query("SELECT * FROM programme_facts ORDER BY programme_name,fact_id",conn)
+    st.dataframe(facts,width="stretch",hide_index=True)

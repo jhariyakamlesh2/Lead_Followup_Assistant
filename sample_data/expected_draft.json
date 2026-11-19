@@ -1,0 +1,24 @@
+{
+  "_note": "Illustrative expected shape only; not a response from a live Anthropic API call.",
+  "provider": "Anthropic (live run required)",
+  "model": "configured by ANTHROPIC_MODEL",
+  "channel": "Email",
+  "subject": "Following up on your programme enquiry",
+  "message": "Hello Aarav, thanks for sharing what you are looking for. The programme is designed for beginners, and live online weekend sessions are available. I will ask the programme team to confirm the current fee, recording availability and placement support before giving you a definite answer. Would you like me to follow up once those details are confirmed?",
+  "fact_ids_used": [1, 2],
+  "claims": [
+    {
+      "claim": "The programme is designed for beginners.",
+      "fact_ids": [1]
+    },
+    {
+      "claim": "Live online weekend sessions are available.",
+      "fact_ids": [2]
+    }
+  ],
+  "review_notes": [
+    "Confirm the current fee with the programme team.",
+    "Confirm recording availability and placement support before responding."
+  ],
+  "status": "Pending Approval"
+}

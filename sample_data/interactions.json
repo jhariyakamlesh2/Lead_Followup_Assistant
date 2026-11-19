@@ -1,0 +1,5 @@
+[
+ {"lead_id":1,"channel":"WhatsApp","direction":"Inbound","message":"I am interested. Is it suitable for a beginner?"},
+ {"lead_id":1,"channel":"Call","direction":"Inbound","message":"I prefer weekend sessions. Please share fees and placement support."},
+ {"lead_id":1,"channel":"Email","direction":"Inbound","message":"Are classes recorded? I still need the exact fee."}
+]
