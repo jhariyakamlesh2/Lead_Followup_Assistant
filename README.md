@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # LeadPilot AI
 ### Project 029 · Lead Follow-up Email & WhatsApp Draft Assistant
 
@@ -139,3 +140,7 @@ tests/                       Offline automated tests
 - [ ] Record the live walkthrough locally (one normal flow and one API-configuration failure); see [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
 - [ ] Add GitHub/demo URLs at submission time if those are part of the approved setup
 
+=======
+# Project_029_Lead_Followup_Assistant
+Project_029_Lead_Followup_Assistant
+>>>>>>> b11920a804a4e381599381696958c52c28c75b21
