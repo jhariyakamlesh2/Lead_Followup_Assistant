@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS draft_messages (
  subject TEXT, message_body TEXT NOT NULL, nlp_stage TEXT, nlp_result_json TEXT NOT NULL,
  fact_ids_json TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
  prompt_version TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Pending Approval',
- reviewer_feedback TEXT, created_at TEXT NOT NULL, reviewed_at TEXT,
+ reviewer_feedback TEXT, created_at TEXT NOT NULL, reviewed_at TEXT, sent_at TEXT,
  FOREIGN KEY(lead_id) REFERENCES leads(lead_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS audit_logs (

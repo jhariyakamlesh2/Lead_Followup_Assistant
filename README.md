@@ -2,15 +2,16 @@
 # LeadPilot AI
 ### Project 029 · Lead Follow-up Email & WhatsApp Draft Assistant
 
-Turn synthetic enquiry history into concise, personalized follow-up **drafts**. LeadPilot combines a lightweight NLP pipeline, approved programme facts, Anthropic Claude, response validation and SQLite. A person reviews every draft; the prototype has no message-sending or production CRM capability.
+Turn synthetic enquiry history into concise, personalized follow-up **drafts**. LeadPilot combines a lightweight NLP pipeline, approved programme facts, Anthropic Claude, response validation and SQLite. A person reviews every draft; approved Email drafts can be sent only through a separately configured SMTP action. WhatsApp remains draft-only, and the prototype has no production CRM capability.
 
-> **Human approval is mandatory.** Nothing is sent, scheduled, or written to a production LMS/CRM.
+> **Human approval is mandatory.** Email is sent only after approval and a separate explicit send action. Nothing is scheduled or written to a production LMS/CRM.
 
 ## What it does
 
 - Maintains leads, inbound/outbound interactions and approved programme facts.
 - Detects conversation stage, stated preferences, question topics, and topics not mentioned in an outbound reply.
 - Creates channel-aware Email or WhatsApp drafts through the real Anthropic Messages API.
+- Sends approved Email drafts through encrypted SMTP only after a separate human action.
 - Validates the JSON structure and approved fact IDs before persisting a draft.
 - Records NLP output, provider/model, prompt version, review feedback and audit events in SQLite.
 - Provides a Streamlit dashboard, lead workspace, draft generator, and human review queue.
@@ -34,15 +35,23 @@ Create a local `.env` only if you do not already have one:
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Edit `.env` with your own Anthropic key and, if needed, a model available to your account:
+Edit `.env` with your own Anthropic key and, if needed, a model available to your account. Add SMTP settings only if you intend to send email:
 
 ```env
 ANTHROPIC_API_KEY=your_anthropic_api_key
 ANTHROPIC_MODEL=claude-sonnet-4-5
 DATABASE_PATH=data/lead_assistant.db
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=
+SMTP_SECURITY=starttls
 ```
 
 Keep `.env` private. It is ignored by Git; do not paste keys into source code, issue reports, screenshots, or chat. Never commit the key. If the configured model is unavailable to your account, set `ANTHROPIC_MODEL` to an Anthropic model you can access.
+
+For provider setup and safe retry guidance, see [docs/EMAIL_SENDING.md](docs/EMAIL_SENDING.md).
 
 Initialize the SQLite database and run the app:
 
@@ -68,7 +77,7 @@ Sign in with user ID `admin` and password `admin@123`. This is a shared, hardcod
 3. Generate an Email or WhatsApp draft. With valid Anthropic credentials and available API credits, this calls the live Anthropic API.
 4. Inspect the generated draft, response metadata, fact IDs and human-review notes.
 5. Open **Review Drafts** and approve, reject or request changes.
-6. Verify that the database status changes. Approval is a review record only; there is no send action.
+6. To test delivery, add a real recipient, configure SMTP, approve an Email draft, and then use the separate **Send email** action. The seeded `@email.test` address is blocked.
 
 `sample_data/expected_draft.json` is an illustrative, non-live example. A real provider response and saved database row are produced only when the app is run with valid credentials.
 
@@ -78,7 +87,7 @@ Sign in with user ID `admin` and password `admin@123`. This is a shared, hardcod
 python -m pytest -v
 ```
 
-Tests use a fake generator and do not require a key, network access or paid API usage. They cover validation, NLP, SQLite, the integrated workflow, Anthropic configuration failure and response validation. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for case-by-case expected and actual results.
+Tests use fake Anthropic and SMTP transports and do not require keys, network access or paid API usage. They cover validation, NLP, SQLite, the integrated workflow, Anthropic configuration failure and response validation. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for case-by-case expected and actual results.
 
 ## Architecture
 
@@ -109,6 +118,7 @@ schema.sql                   SQLite tables, keys, indexes and relationships
 lead_assistant/
   config.py                  Environment-based settings
   database.py                SQLite CRUD, sample data and audit logging
+  email_sender.py            SMTP transport and recipient validation
   nlp.py                     Text cleaning, tokenization and heuristic analysis
   prompts.py                 Versioned system/task prompt pack
   llm.py                     Anthropic API client and response validation
@@ -116,14 +126,14 @@ lead_assistant/
 sample_data/                 Synthetic input/output and packaged SQLite fixture
 data/lead_assistant.db       Local runtime database (not committed)
 prompt_pack/                 Prompt design notes and expected JSON contract
-docs/                        Architecture, test evidence, demo and plan
+docs/                        Architecture, email setup, test evidence and demo
 tests/                       Offline automated tests
 ```
 
 ## Data, privacy and limitations
 
-- Names, contacts, messages and programme facts are synthetic assignment examples; they are not verified real programme policies.
-- No LMS/CRM scraping, private endpoint access, production integration or message sending is implemented.
+- Seeded names, contacts and messages are synthetic; programme facts are not verified real policies. User-entered real contacts should be handled only in an appropriately secured deployment.
+- No LMS/CRM scraping, private endpoint access, or production integration is implemented. Email sending is explicit and SMTP-based; messages are never sent automatically.
 - Only facts marked approved for the selected programme are passed to Claude. Drafts remain untrusted until a human checks them.
 - Fact-ID validation checks references and JSON shape, not whether prose is semantically entailed by a fact.
 - NLP uses transparent keyword/rule heuristics rather than a trained model. Outbound topic matching does not guarantee that an enquiry was fully answered.

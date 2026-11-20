@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 import pandas as pd
+from .email_sender import validate_recipient_address
 
 def now_iso():
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -32,6 +33,11 @@ class Database:
         schema = schema_path.read_text(encoding="utf-8")
         with self.connect() as conn:
             conn.executescript(schema)
+            draft_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(draft_messages)")
+            }
+            if "sent_at" not in draft_columns:
+                conn.execute("ALTER TABLE draft_messages ADD COLUMN sent_at TEXT")
 
     def add_lead(self, full_name, email, phone, programme_interest, source="Sample"):
         name, programme = (full_name or "").strip(), (programme_interest or "").strip()
@@ -138,19 +144,147 @@ class Database:
             raise ValueError("Invalid review decision.")
         with self.connect() as conn:
             cur = conn.execute(
-                "UPDATE draft_messages SET status=?,reviewer_feedback=?,reviewed_at=? WHERE draft_id=?",
+                """UPDATE draft_messages
+                   SET status=?,reviewer_feedback=?,reviewed_at=?
+                   WHERE draft_id=? AND status='Pending Approval'""",
                 (decision, feedback, now_iso(), draft_id))
             if cur.rowcount == 0:
-                raise LookupError("Draft not found.")
+                exists = conn.execute(
+                    "SELECT 1 FROM draft_messages WHERE draft_id=?", (draft_id,)
+                ).fetchone()
+                if not exists:
+                    raise LookupError("Draft not found.")
+                raise ValueError("Only pending drafts can be reviewed.")
             row = conn.execute("SELECT lead_id FROM draft_messages WHERE draft_id=?",
                                (draft_id,)).fetchone()
             self.audit(row["lead_id"], draft_id, "DRAFT_REVIEWED",
                        {"decision": decision, "feedback": feedback}, conn)
 
+    def claim_email_draft_for_sending(self, draft_id, retry_confirmed=False):
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT d.draft_id,d.lead_id,d.channel,d.subject,d.message_body,d.status,
+                          l.full_name,l.email
+                   FROM draft_messages d JOIN leads l ON l.lead_id=d.lead_id
+                   WHERE d.draft_id=?""",
+                (draft_id,),
+            ).fetchone()
+            if not row:
+                raise LookupError("Draft not found.")
+            if row["channel"] != "Email":
+                raise ValueError("Only Email drafts can be sent through SMTP.")
+            if row["status"] == "Send Failed":
+                if not retry_confirmed:
+                    raise ValueError("Confirm the previous email was not delivered before retrying.")
+            elif row["status"] != "Approved":
+                raise ValueError("Only approved email drafts can be sent.")
+            if not row["email"]:
+                raise ValueError("This lead does not have an email address.")
+            subject = str(row["subject"] or "").strip()
+            if not subject:
+                raise ValueError("The approved email must have a subject.")
+            if "\r" in subject or "\n" in subject:
+                raise ValueError("The email subject cannot contain line breaks.")
+            if not str(row["message_body"] or "").strip():
+                raise ValueError("The approved email body cannot be empty.")
+            validate_recipient_address(row["email"])
+
+            cur = conn.execute(
+                """UPDATE draft_messages SET status='Sending'
+                   WHERE draft_id=? AND status=? AND channel='Email'""",
+                (draft_id, row["status"]),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("This draft's send status changed. Refresh and review it again.")
+            self.audit(
+                row["lead_id"],
+                draft_id,
+                "EMAIL_SEND_STARTED",
+                {"retry": row["status"] == "Send Failed"},
+                conn,
+            )
+            return dict(row)
+
+    def mark_email_send_failed(self, draft_id, error_type):
+        with self.connect() as conn:
+            cur = conn.execute(
+                """UPDATE draft_messages SET status='Send Failed'
+                   WHERE draft_id=? AND status='Sending'""",
+                (draft_id,),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("No email send is in progress for this draft.")
+            row = conn.execute(
+                "SELECT lead_id FROM draft_messages WHERE draft_id=?",
+                (draft_id,),
+            ).fetchone()
+            self.audit(
+                row["lead_id"],
+                draft_id,
+                "EMAIL_SEND_FAILED",
+                {"error_type": error_type},
+                conn,
+            )
+
+    def reconcile_email_send(self, draft_id, confirmed_not_delivered):
+        if not confirmed_not_delivered:
+            raise ValueError("Verify non-delivery with your SMTP provider before recovery.")
+        with self.connect() as conn:
+            cur = conn.execute(
+                """UPDATE draft_messages SET status='Send Failed'
+                   WHERE draft_id=? AND status='Sending'""",
+                (draft_id,),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("This draft is not awaiting send reconciliation.")
+            row = conn.execute(
+                "SELECT lead_id FROM draft_messages WHERE draft_id=?",
+                (draft_id,),
+            ).fetchone()
+            self.audit(
+                row["lead_id"],
+                draft_id,
+                "EMAIL_SEND_RECONCILED",
+                {"confirmed_not_delivered": True},
+                conn,
+            )
+
+    def mark_email_draft_sent(self, draft_id):
+        stamp = now_iso()
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT lead_id,message_body FROM draft_messages
+                   WHERE draft_id=? AND channel='Email' AND status='Sending'""",
+                (draft_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("This draft is not in the sending state.")
+            cur = conn.execute(
+                """UPDATE draft_messages SET status='Sent',sent_at=?
+                   WHERE draft_id=? AND status='Sending'""",
+                (stamp, draft_id),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("This draft's send status changed.")
+            conn.execute(
+                """INSERT INTO interactions
+                   (lead_id,channel,direction,message,occurred_at,created_at)
+                   VALUES(?,'Email','Outbound',?,?,?)""",
+                (row["lead_id"], row["message_body"], stamp, stamp),
+            )
+            self.audit(
+                row["lead_id"],
+                draft_id,
+                "EMAIL_SENT",
+                {"channel": "Email"},
+                conn,
+            )
+
     def get_drafts(self):
         with self.connect() as conn:
             return pd.read_sql_query(
-                """SELECT d.*,l.full_name,l.programme_interest FROM draft_messages d
+                """SELECT d.*,l.full_name,l.email,l.source,l.programme_interest
+                   FROM draft_messages d
                    JOIN leads l ON d.lead_id=l.lead_id ORDER BY d.created_at DESC""", conn)
 
     def audit(self, lead_id, draft_id, action, details, conn):

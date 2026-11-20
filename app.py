@@ -1,9 +1,11 @@
 from pathlib import Path
+import smtplib
 
 import pandas as pd
 import streamlit as st
 from lead_assistant.database import Database
 from lead_assistant.config import settings
+from lead_assistant.email_sender import EmailSender, validate_recipient_address
 from lead_assistant.llm import AnthropicDraftGenerator
 from lead_assistant.workflow import generate_and_save_draft
 from lead_assistant.nlp import analyze_conversation
@@ -46,6 +48,7 @@ def get_db():
 
 
 db = get_db()
+email_sender = EmailSender(settings)
 st.title(":rainbow[LeadPilot AI]", icon=":material/mark_email_unread:")
 tagline_animation = ""
 if not st.session_state.get("leadpilot_tagline_animation_played", False):
@@ -261,7 +264,8 @@ with st.sidebar:
         key="workspace-nav",
     )
     with st.container(border=True):
-        st.caption("Synthetic demo data. No message is sent.")
+        st.badge("Demo mode", icon=":material/science:", color="blue")
+        st.caption("Demo addresses are blocked; approved emails can be sent after review.")
         if st.button("Sign out", icon=":material/logout:", width="stretch"):
             st.session_state["authenticated"] = False
             st.rerun()
@@ -429,9 +433,17 @@ elif page=="Generate Draft":
                         st.write(note)
                 else:
                     st.caption("No additional review notes.")
-            st.warning("Saved draft only. Human approval is required. Nothing has been sent.")
+            st.warning(
+                "Saved draft only. Human approval and a separate email send action are required."
+            )
 elif page=="Review Drafts":
     st.subheader("Human review queue"); drafts=db.get_drafts()
+    send_notice = st.session_state.pop("email_send_notice", None)
+    if send_notice:
+        if send_notice[0] == "success":
+            st.success(send_notice[1])
+        else:
+            st.error(send_notice[1])
     if drafts.empty: st.info("No drafts available.")
     else:
         st.dataframe(drafts[["draft_id","full_name","channel","status","provider","model","created_at"]],width="stretch",hide_index=True)
@@ -446,6 +458,130 @@ elif page=="Review Drafts":
             if y.button("Needs changes"): db.review_draft(int(did),"Needs Changes",feedback); st.rerun()
             if z.button("Reject"): db.review_draft(int(did),"Rejected",feedback); st.rerun()
         else: st.info("No pending drafts.")
+
+    st.subheader("Approved email drafts")
+    if drafts.empty or not {"channel", "status"}.issubset(drafts.columns):
+        st.info("Approve an email draft to make it available here.")
+    else:
+        approved_emails = drafts[
+            (drafts["channel"] == "Email")
+            & drafts["status"].isin(["Approved", "Send Failed", "Sending"])
+        ]
+        if approved_emails.empty:
+            st.info("Approve an email draft to make it available here.")
+        else:
+            email_draft_id = st.selectbox(
+                "Email draft",
+                approved_emails["draft_id"].tolist(),
+                format_func=lambda draft_id: (
+                    f"#{draft_id} — "
+                    f"{approved_emails.loc[approved_emails.draft_id == draft_id, 'full_name'].iloc[0]}"
+                ),
+                key="approved-email-draft",
+            )
+            email_draft = approved_emails[
+                approved_emails["draft_id"] == email_draft_id
+            ].iloc[0]
+            recipient = "" if pd.isna(email_draft["email"]) else str(email_draft["email"]).strip()
+            subject = "" if pd.isna(email_draft["subject"]) else str(email_draft["subject"]).strip()
+            st.caption(
+                f"To: {email_draft['full_name']} <{recipient or 'email missing'}>"
+            )
+            st.write(f"Subject: {subject or 'Missing subject'}")
+            st.text_area(
+                "Approved email preview",
+                email_draft["message_body"],
+                height=180,
+                disabled=True,
+                key=f"email-preview-{email_draft_id}",
+            )
+
+            recipient_error = None
+            try:
+                validate_recipient_address(recipient)
+            except ValueError as error:
+                recipient_error = str(error)
+            smtp_configuration_error = email_sender.configuration_error()
+
+            if email_draft["status"] == "Sending":
+                st.warning(
+                    "A send attempt may still be active or may have been interrupted. Wait for it to stop and check your SMTP provider before retrying."
+                )
+                delivery_checked = st.checkbox(
+                    "I verified no send is active and this email was not delivered.",
+                    key=f"email-recovery-confirm-{email_draft_id}",
+                )
+                if st.button(
+                    "Allow retry after verification",
+                    disabled=not delivery_checked,
+                    key=f"email-recover-{email_draft_id}",
+                ):
+                    db.reconcile_email_send(email_draft_id, delivery_checked)
+                    st.session_state["email_send_notice"] = (
+                        "success",
+                        "Send status updated. You can now retry this email.",
+                    )
+                    st.rerun()
+            elif recipient_error:
+                st.warning(recipient_error)
+            elif "\r" in subject or "\n" in subject:
+                st.warning("The email subject contains unsupported line breaks.")
+            elif not subject:
+                st.warning("This email draft has no subject. Request changes before sending.")
+            elif smtp_configuration_error:
+                st.info(
+                    "Email sending is disabled. "
+                    + smtp_configuration_error
+                )
+            else:
+                is_retry = email_draft["status"] == "Send Failed"
+                retry_confirmed = False
+                if is_retry:
+                    st.warning(
+                        "The previous attempt failed. Check your provider before retrying."
+                    )
+                    retry_confirmed = st.checkbox(
+                        "I confirmed the previous email was not delivered.",
+                        key=f"email-retry-confirm-{email_draft_id}",
+                    )
+                send_clicked = st.button(
+                    "Retry email send" if is_retry else "Send email",
+                    type="primary",
+                    disabled=is_retry and not retry_confirmed,
+                    icon=":material/send:",
+                    key=f"send-email-{email_draft_id}",
+                )
+                if send_clicked:
+                    try:
+                        sending_draft = db.claim_email_draft_for_sending(
+                            int(email_draft_id),
+                            retry_confirmed=retry_confirmed,
+                        )
+                    except (LookupError, ValueError) as error:
+                        st.error(str(error))
+                    else:
+                        try:
+                            with st.spinner("Sending email..."):
+                                email_sender.send_email(
+                                    sending_draft["email"],
+                                    sending_draft["subject"],
+                                    sending_draft["message_body"],
+                                )
+                        except (OSError, RuntimeError, ValueError, smtplib.SMTPException) as error:
+                            db.mark_email_send_failed(
+                                int(email_draft_id), type(error).__name__
+                            )
+                            st.session_state["email_send_notice"] = (
+                                "error",
+                                f"Email send failed: {error}. Check provider delivery status before retrying.",
+                            )
+                        else:
+                            db.mark_email_draft_sent(int(email_draft_id))
+                            st.session_state["email_send_notice"] = (
+                                "success",
+                                f"Email sent to {sending_draft['email']}.",
+                            )
+                        st.rerun()
 elif page=="Programme Facts":
     st.subheader("Approved programme knowledge base")
     st.caption("Only approved facts are passed to the LLM. Use verified, trainer-approved information.")
