@@ -1,5 +1,7 @@
-import streamlit as st
+from pathlib import Path
+
 import pandas as pd
+import streamlit as st
 from lead_assistant.database import Database
 from lead_assistant.config import settings
 from lead_assistant.llm import AnthropicDraftGenerator
@@ -7,6 +9,11 @@ from lead_assistant.workflow import generate_and_save_draft
 from lead_assistant.nlp import analyze_conversation
 
 st.set_page_config(page_title="LeadPilot AI", page_icon="✉️", layout="wide")
+st.logo(
+    str(Path(__file__).resolve().parent / "assets" / "leadpilot-logo.svg"),
+    size="large",
+    icon_image=str(Path(__file__).resolve().parent / "assets" / "leadpilot-mark.svg"),
+)
 
 DEMO_USER_ID = "admin"
 DEMO_PASSWORD = "admin@123"
@@ -40,18 +47,224 @@ def get_db():
 
 db = get_db()
 st.title(":rainbow[LeadPilot AI]", icon=":material/mark_email_unread:")
-st.markdown(":blue[Intelligent lead follow-ups · NLP insights · Human-approved messaging]")
+tagline_animation = ""
+if not st.session_state.get("leadpilot_tagline_animation_played", False):
+    tagline_animation = " leadpilot-tagline--enter"
+    st.session_state["leadpilot_tagline_animation_played"] = True
+st.html(
+    f"""
+    <style>
+    .leadpilot-tagline {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.65rem;
+        margin: 0.35rem 0 1.25rem;
+    }}
+
+    .leadpilot-tagline__phrase {{
+        position: relative;
+        isolation: isolate;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        max-width: 100%;
+        padding: 0.55rem 0.95rem 0.55rem 0.62rem;
+        border: 1px solid #CFDBFF;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #FFFFFF 8%, #EDF3FF 100%);
+        box-shadow: 0 7px 18px rgba(37, 75, 145, 0.1);
+        color: #172A49;
+        font-size: 0.94rem;
+        font-weight: 600;
+        line-height: 1.25;
+        transition: transform 180ms ease, box-shadow 180ms ease;
+    }}
+
+    .leadpilot-tagline__phrase:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 11px 24px rgba(37, 75, 145, 0.16);
+    }}
+
+    .leadpilot-tagline__icon {{
+        display: inline-grid;
+        width: 1.85rem;
+        height: 1.85rem;
+        flex: none;
+        place-items: center;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: inset 0 0 0 1px rgba(37, 75, 145, 0.1);
+        color: #315CEB;
+        font-size: 1.05rem;
+        font-weight: 700;
+    }}
+
+    .leadpilot-tagline__insights {{
+        border-color: #DED4FF;
+        background: linear-gradient(135deg, #FFFFFF 8%, #F4F0FF 100%);
+        box-shadow: 0 7px 18px rgba(92, 63, 168, 0.1);
+    }}
+
+    .leadpilot-tagline__insights .leadpilot-tagline__icon {{
+        color: #7450D8;
+        box-shadow: inset 0 0 0 1px rgba(116, 80, 216, 0.16);
+    }}
+
+    .leadpilot-tagline__approved {{
+        border-color: #C6E9DD;
+        background: linear-gradient(135deg, #FFFFFF 8%, #EAF8F2 100%);
+        box-shadow: 0 7px 18px rgba(31, 119, 94, 0.1);
+    }}
+
+    .leadpilot-tagline__approved .leadpilot-tagline__icon {{
+        color: #16866A;
+        box-shadow: inset 0 0 0 1px rgba(22, 134, 106, 0.16);
+    }}
+
+    .leadpilot-tagline--enter .leadpilot-tagline__intelligent {{
+        animation: leadpilot-feature-glide 760ms cubic-bezier(0.2, 0.8, 0.2, 1) 80ms both;
+    }}
+
+    .leadpilot-tagline--enter .leadpilot-tagline__insights {{
+        animation: leadpilot-feature-pop 760ms cubic-bezier(0.2, 0.8, 0.2, 1) 260ms both;
+    }}
+
+    .leadpilot-tagline--enter .leadpilot-tagline__approved {{
+        animation: leadpilot-feature-confirm 800ms cubic-bezier(0.2, 0.8, 0.2, 1) 440ms both;
+    }}
+
+    .leadpilot-tagline--enter .leadpilot-tagline__approved .leadpilot-tagline__icon {{
+        animation: leadpilot-check-pop 650ms ease-out 900ms both;
+    }}
+
+    @keyframes leadpilot-feature-glide {{
+        0% {{ opacity: 0; filter: blur(5px); transform: translate(-16px, 9px) scale(0.95); }}
+        70% {{ opacity: 1; filter: blur(0); transform: translate(0, -2px) scale(1.03); }}
+        100% {{ opacity: 1; filter: blur(0); transform: translate(0) scale(1); }}
+    }}
+
+    @keyframes leadpilot-feature-pop {{
+        0% {{ opacity: 0; filter: blur(4px); transform: translateY(12px) scale(0.82) rotate(-4deg); }}
+        68% {{ opacity: 1; filter: blur(0); transform: translateY(-2px) scale(1.06) rotate(1deg); }}
+        100% {{ opacity: 1; filter: blur(0); transform: translateY(0) scale(1) rotate(0); }}
+    }}
+
+    @keyframes leadpilot-feature-confirm {{
+        0% {{ opacity: 0; transform: translateY(14px) scale(0.92); }}
+        72% {{ opacity: 1; transform: translateY(-2px) scale(1.03); }}
+        100% {{ opacity: 1; transform: translateY(0) scale(1); }}
+    }}
+
+    @keyframes leadpilot-check-pop {{
+        0% {{ transform: scale(0.7) rotate(-30deg); }}
+        70% {{ transform: scale(1.14) rotate(8deg); }}
+        100% {{ transform: scale(1) rotate(0); }}
+    }}
+
+    @media (max-width: 640px) {{
+        .leadpilot-tagline {{ gap: 0.5rem; }}
+        .leadpilot-tagline__phrase {{ padding: 0.5rem 0.75rem 0.5rem 0.52rem; font-size: 0.87rem; }}
+        .leadpilot-tagline__icon {{ width: 1.75rem; height: 1.75rem; }}
+    }}
+
+    @media (prefers-reduced-motion: reduce) {{
+        .leadpilot-tagline__phrase,
+        .leadpilot-tagline__phrase:hover {{
+            transition: none;
+            transform: none;
+        }}
+
+        .leadpilot-tagline--enter .leadpilot-tagline__phrase,
+        .leadpilot-tagline--enter .leadpilot-tagline__icon {{
+            animation: none;
+        }}
+    }}
+    </style>
+    <p class="leadpilot-tagline{tagline_animation}">
+        <span class="leadpilot-tagline__phrase leadpilot-tagline__intelligent">
+            <span class="leadpilot-tagline__icon" aria-hidden="true">✦</span>
+            Intelligent lead follow-ups
+        </span>
+        <span class="leadpilot-tagline__phrase leadpilot-tagline__insights">
+            <span class="leadpilot-tagline__icon" aria-hidden="true">∿</span>
+            NLP insights
+        </span>
+        <span class="leadpilot-tagline__phrase leadpilot-tagline__approved">
+            <span class="leadpilot-tagline__icon" aria-hidden="true">✓</span>
+            Human-approved messaging
+        </span>
+    </p>
+    """
+)
 leads, drafts = db.get_leads(), db.get_drafts()
 a,b,c,d = st.columns(4)
 a.metric("Total leads",len(leads))
 b.metric("History",sum(len(db.get_history(int(x))) for x in leads["lead_id"]) if not leads.empty else 0)
 c.metric("Drafts",len(drafts))
 d.metric("Queue",int((drafts.status=="Pending Approval").sum()) if not drafts.empty else 0)
-page = st.sidebar.radio("Workspace",["Dashboard","Lead Management","Generate Draft","Review Drafts","Programme Facts"])
-st.sidebar.caption("Synthetic demo data. No message is sent.")
-if st.sidebar.button("Sign out"):
-    st.session_state["authenticated"] = False
-    st.rerun()
+with st.sidebar:
+    st.markdown("### :material/space_dashboard: Workspace")
+    st.caption("Your lead follow-up workspace")
+    st.html(
+        """
+        <style>
+        .st-key-workspace-nav [role="radiogroup"] {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+
+        .st-key-workspace-nav label:has(input[type="radio"]) {
+            display: flex;
+            align-items: center;
+            width: 100%;
+            padding: 0.52rem 0.65rem;
+            border: 1px solid transparent;
+            border-radius: 0.8rem;
+            background: transparent;
+            transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+        }
+
+        .st-key-workspace-nav label:has(input[type="radio"]):hover {
+            transform: translateX(2px);
+            border-color: rgba(174, 197, 255, 0.26);
+            background: rgba(130, 166, 255, 0.1);
+        }
+
+        .st-key-workspace-nav label:has(input[type="radio"]:checked) {
+            border-color: rgba(143, 171, 255, 0.55);
+            background: linear-gradient(110deg, rgba(54, 92, 219, 0.38), rgba(54, 92, 219, 0.12));
+            box-shadow: inset 3px 0 0 #83A7FF, 0 6px 16px rgba(0, 0, 0, 0.13);
+        }
+
+        .st-key-workspace-nav input[type="radio"] {
+            accent-color: #AFC2FF;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .st-key-workspace-nav label:has(input[type="radio"]) {
+                transition: none;
+            }
+
+            .st-key-workspace-nav label:has(input[type="radio"]):hover {
+                transform: none;
+            }
+        }
+        </style>
+        """
+    )
+    page = st.radio(
+        "Workspace",
+        ["Dashboard", "Lead Management", "Generate Draft", "Review Drafts", "Programme Facts"],
+        label_visibility="collapsed",
+        key="workspace-nav",
+    )
+    with st.container(border=True):
+        st.caption("Synthetic demo data. No message is sent.")
+        if st.button("Sign out", icon=":material/logout:", width="stretch"):
+            st.session_state["authenticated"] = False
+            st.rerun()
 if page=="Dashboard":
     st.subheader("Workspace overview")
     x,y=st.columns([1.2,1])
