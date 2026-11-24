@@ -48,6 +48,9 @@ def get_db():
 
 
 db = get_db()
+if hasattr(db, "consume_duplicate_warnings"):
+    for duplicate_warning in db.consume_duplicate_warnings():
+        st.warning(duplicate_warning)
 email_sender = EmailSender(settings)
 st.title(":rainbow[LeadPilot AI]", icon=":material/mark_email_unread:")
 tagline_animation = ""
@@ -306,7 +309,13 @@ elif page=="Lead Management":
         name=x.text_input("Full name *"); email=y.text_input("Email")
         phone=x.text_input("Phone"); programme=y.text_input("Programme interest *",value="Data Analytics Career Programme")
         if st.form_submit_button("Save lead",type="primary"):
-            try: st.success(f"Lead #{db.add_lead(name,email,phone,programme)} created."); st.rerun()
+            try:
+                lead_id = db.add_lead(name,email,phone,programme)
+                if hasattr(db, "consume_duplicate_warnings"):
+                    for duplicate_warning in db.consume_duplicate_warnings():
+                        st.warning(duplicate_warning)
+                st.success(f"Lead #{lead_id} saved.")
+                st.rerun()
             except Exception as e: st.error(str(e))
     st.divider(); st.markdown("#### Add interaction")
     if not leads.empty:
@@ -316,7 +325,13 @@ elif page=="Lead Management":
             direction=st.selectbox("Direction",["Inbound","Outbound"])
             msg=st.text_area("Message / call notes")
             if st.form_submit_button("Save interaction"):
-                try: db.add_interaction(int(lid),channel,msg,direction); st.success("Saved."); st.rerun()
+                try:
+                    interaction_id = db.add_interaction(int(lid),channel,msg,direction)
+                    if hasattr(db, "consume_duplicate_warnings"):
+                        for duplicate_warning in db.consume_duplicate_warnings():
+                            st.warning(duplicate_warning)
+                    st.success(f"Interaction #{interaction_id} saved.")
+                    st.rerun()
                 except Exception as e: st.error(str(e))
     st.markdown("#### Lead directory"); st.dataframe(leads,width="stretch",hide_index=True)
 elif page=="Generate Draft":
@@ -607,7 +622,13 @@ elif page=="Programme Facts":
         cat=st.selectbox("Category",["Audience","Schedule","Fees","Duration","Eligibility","Learning support","Placement","Recording","Other"])
         fact=st.text_area("Approved fact")
         if st.form_submit_button("Add approved fact"):
-            try: db.add_fact(prog,cat,fact,True); st.success("Added."); st.rerun()
+            try:
+                fact_id = db.add_fact(prog,cat,fact,True)
+                if hasattr(db, "consume_duplicate_warnings"):
+                    for duplicate_warning in db.consume_duplicate_warnings():
+                        st.warning(duplicate_warning)
+                st.success(f"Approved fact #{fact_id} saved.")
+                st.rerun()
             except Exception as e: st.error(str(e))
     with db.connect() as conn:
         facts=pd.read_sql_query("SELECT * FROM programme_facts ORDER BY programme_name,fact_id",conn)

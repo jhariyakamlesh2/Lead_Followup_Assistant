@@ -6,7 +6,7 @@ Run from the project root:
 python -m pytest -v
 ```
 
-The tests are offline and use a fake generator where needed. Expected/actual outcomes below reflect the latest local run: all listed automated tests passed. A live Anthropic request is deliberately not part of automated tests because it requires private credentials and may incur API charges.
+The tests are offline and use fake Anthropic and SMTP transports where needed. The latest local run contains **50 passing automated tests** across normal and edge scenarios. A live Anthropic request is deliberately not part of automated tests because it requires private credentials and may incur API charges.
 
 | ID | Input / scenario | Expected | Actual |
 |---|---|---|---|
@@ -41,6 +41,13 @@ The tests are offline and use a fake generator where needed. Expected/actual out
 | T29 | Learning-interest text mentions AI Engineering | Stage is Interested and AI Engineering preference is detected | Pass |
 | T30 | AI Engineering demo seed is initialized | Exactly five approved synthetic AI Engineering facts are available | Pass |
 | T31 | Programme has no approved facts | Generator is not called and no draft is persisted | Pass |
+| T32 | Lead address contains extra `@` separators | Rejected as malformed with `ValueError` | Pass |
+| T33 | WhatsApp and Email subject constraints | WhatsApp subject rejected if non-empty; Email line breaks rejected | Pass |
+| T34 | Anthropic response ID is stored | Saved draft includes response/model metadata and provider trace | Pass |
+| T35 | Duplicate lead is added again | Existing lead is reused and a warning is issued | Pass |
+| T36 | Duplicate interaction is added again | Existing interaction is reused and a warning is issued | Pass |
+| T37 | Duplicate approved fact is added again | Existing fact is reused and a warning is issued | Pass |
+| T38 | Legacy database contains duplicate lead and interaction rows | Duplicates are merged/deleted with warnings during initialization | Pass |
 
 For manual live verification, run one successful Anthropic draft and one configuration/API failure as described in `DEMO_SCRIPT.md`. Never add a real API key to test fixtures or evidence.
 

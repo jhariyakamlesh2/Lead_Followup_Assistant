@@ -11,9 +11,22 @@ def test_crud_and_review(tmp_path):
     assert db.get_lead(lid)["full_name"]=="Test Lead"
     assert len(db.get_history(lid))==1
     fid=db.add_fact("Demo Programme","Schedule","Weekend classes.")
-    did=db.save_draft(lid,"WhatsApp","","Hello there.",{"stage":"Interested"},[fid],"Test","mock","1.0")
+    did=db.save_draft(lid,"WhatsApp","","Hello there.",{"stage":"Interested"},[fid],"Test","mock","1.0","msg_test")
     db.review_draft(did,"Approved","Checked.")
-    assert db.get_drafts().iloc[0]["status"]=="Approved"
+    draft = db.get_drafts().iloc[0]
+    assert draft["status"]=="Approved"
+    assert draft["response_id"]=="msg_test"
+
+
+def test_whatsapp_subject_and_email_subject_are_validated(tmp_path):
+    db = Database(tmp_path / "test.db")
+    lid = db.add_lead("Test Lead", "", "", "Demo Programme")
+    fid = db.add_fact("Demo Programme", "Schedule", "Weekend classes.")
+
+    with pytest.raises(ValueError, match="subject must be empty"):
+        db.save_draft(lid, "WhatsApp", "Not allowed", "Hello", {"stage": "Interested"}, [fid], "Test", "mock", "1.0")
+    with pytest.raises(ValueError, match="line breaks"):
+        db.save_draft(lid, "Email", "Subject\nBcc: test@example.test", "Hello", {"stage": "Interested"}, [fid], "Test", "mock", "1.0")
 def test_missing_required_lead_fields(tmp_path):
     db=Database(tmp_path/"test.db")
     with pytest.raises(ValueError): db.add_lead("","","","")
@@ -22,6 +35,12 @@ def test_invalid_email_is_rejected(tmp_path):
     db=Database(tmp_path/"test.db")
     with pytest.raises(ValueError,match="valid email"):
         db.add_lead("Test Lead","not-an-email","","Demo Programme")
+
+
+def test_malformed_address_with_extra_separator_is_rejected(tmp_path):
+    db = Database(tmp_path / "test.db")
+    with pytest.raises(ValueError, match="valid email"):
+        db.add_lead("Test Lead", "bad@@example.test", "", "Demo Programme")
 
 def test_empty_interaction_is_rejected(tmp_path):
     db=Database(tmp_path/"test.db")
@@ -69,3 +88,80 @@ def test_demo_seed_adds_approved_ai_engineering_facts(tmp_path):
 
     assert len(facts) == 5
     assert all(fact["fact_text"].strip() for fact in facts)
+
+
+def test_duplicate_lead_is_reused_and_warned(tmp_path):
+    db = Database(tmp_path / "test.db")
+    first_id = db.add_lead("Duplicate Lead", "lead@example.test", "", "Demo Programme")
+    db.consume_duplicate_warnings()
+
+    second_id = db.add_lead(" duplicate lead ", "LEAD@example.test", "", "demo programme")
+
+    assert second_id == first_id
+    assert len(db.get_leads()) == 1
+    assert db.consume_duplicate_warnings()
+
+
+def test_duplicate_interaction_is_reused_and_warned(tmp_path):
+    db = Database(tmp_path / "test.db")
+    lead_id = db.add_lead("Test Lead", "", "", "Demo Programme")
+    first_id = db.add_interaction(
+        lead_id, "Email", "Please share details.", "Inbound", "2026-11-24T10:00:00"
+    )
+    db.consume_duplicate_warnings()
+
+    second_id = db.add_interaction(
+        lead_id, "email", "  please share details.  ", "inbound", "2026-11-24T10:00:00"
+    )
+
+    assert second_id == first_id
+    assert len(db.get_history(lead_id)) == 1
+    assert db.consume_duplicate_warnings()
+
+
+def test_duplicate_fact_is_reused_and_warned(tmp_path):
+    db = Database(tmp_path / "test.db")
+    first_id = db.add_fact("Demo Programme", "Schedule", "Weekend classes.")
+    db.consume_duplicate_warnings()
+
+    second_id = db.add_fact(" demo programme ", " schedule ", " weekend classes.")
+
+    assert second_id == first_id
+    assert len(db.get_approved_facts("Demo Programme")) == 1
+    assert db.consume_duplicate_warnings()
+
+
+def test_existing_duplicate_rows_are_removed_during_initialize(tmp_path):
+    db_path = tmp_path / "legacy.sqlite"
+    db = Database(db_path)
+    lead_id = db.add_lead("Cleanup Lead", "", "", "Demo Programme")
+    db.consume_duplicate_warnings()
+
+    with db.connect() as conn:
+        conn.execute("DROP INDEX IF EXISTS uq_leads_identity")
+        conn.execute("DROP INDEX IF EXISTS uq_interactions_identity")
+        conn.execute(
+            """INSERT INTO leads(full_name,email,phone,programme_interest,source,status,created_at,updated_at)
+               VALUES(?,?,?,?,?,'New',?,?)""",
+            ("cleanup lead", "", "", "demo programme", "Manual",
+             "2026-11-24T10:00:00", "2026-11-24T10:00:00"),
+        )
+        conn.execute(
+            """INSERT INTO interactions(lead_id,channel,direction,message,occurred_at,created_at)
+               VALUES(?,?,?,?,?,?)""",
+            (lead_id, "Email", "Inbound", "Same message", "2026-11-24T10:00:00",
+             "2026-11-24T10:00:00"),
+        )
+        conn.execute(
+            """INSERT INTO interactions(lead_id,channel,direction,message,occurred_at,created_at)
+               VALUES(?,?,?,?,?,?)""",
+            (lead_id, "email", "inbound", "Same message", "2026-11-24T10:00:00",
+             "2026-11-24T10:00:00"),
+        )
+
+    reloaded = Database(db_path)
+    warnings_list = reloaded.consume_duplicate_warnings()
+
+    assert len(reloaded.get_leads()) == 1
+    assert len(reloaded.get_history(lead_id)) == 1
+    assert any("Duplicate" in warning for warning in warnings_list)

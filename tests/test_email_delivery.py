@@ -82,7 +82,7 @@ def create_draft(db, email, channel="Email", approve=True):
     draft_id = db.save_draft(
         lead_id,
         channel,
-        "A quick follow-up",
+        "" if channel == "WhatsApp" else "A quick follow-up",
         "Hello Taylor,\n\nHere are the details we discussed.",
         {"stage": "Interested"},
         [],
@@ -192,7 +192,7 @@ def test_existing_database_gets_sent_at_migration(tmp_path):
     schema_path = Path(__file__).resolve().parents[1] / "schema.sql"
     legacy_schema = schema_path.read_text(encoding="utf-8").replace(
         ", sent_at TEXT", ""
-    )
+    ).replace(" response_id TEXT,", "")
     with sqlite3.connect(database_path) as connection:
         connection.executescript(legacy_schema)
 
@@ -203,6 +203,7 @@ def test_existing_database_gets_sent_at_migration(tmp_path):
             row[1] for row in connection.execute("PRAGMA table_info(draft_messages)")
         }
     assert "sent_at" in columns
+    assert "response_id" in columns
 
 
 def test_database_email_send_lifecycle_and_retry_confirmation(tmp_path):

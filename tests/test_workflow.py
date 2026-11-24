@@ -77,3 +77,16 @@ def test_missing_approved_facts_blocks_draft_before_generation(tmp_path):
 
     assert generator.received_history is None
     assert db.get_drafts().empty
+
+
+def test_end_to_end_persists_response_id(tmp_path):
+    db = Database(tmp_path / "test.db")
+    lead_id = db.add_lead("Demo Lead", "", "", "Demo Programme")
+    db.add_interaction(lead_id, "Email", "I am interested.")
+    fact_id = db.add_fact("Demo Programme", "Audience", "The programme is designed for beginners.")
+
+    result = generate_and_save_draft(db, lead_id, "Email", FakeGenerator(fact_id))
+
+    draft = db.get_drafts().iloc[0]
+    assert draft["response_id"] == "test-id"
+    assert int(draft["draft_id"]) == result["draft_id"]

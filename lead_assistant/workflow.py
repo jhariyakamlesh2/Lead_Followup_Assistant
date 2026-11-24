@@ -18,5 +18,5 @@ def generate_and_save_draft(db, lead_id, channel, generator):
         raise ValueError("Unsupported fact reference.")
     draft_id = db.save_draft(lead_id, channel, result.get("subject",""),
         result["message"], nlp, result["fact_ids_used"], metadata["provider"],
-        metadata["model"], PROMPT_VERSION)
+        metadata["model"], PROMPT_VERSION, metadata.get("response_id"))
     return {"draft_id":draft_id,"nlp":nlp,"draft":result,"metadata":metadata}

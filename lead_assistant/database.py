@@ -2,6 +2,9 @@ import sqlite3, json
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
+from email.headerregistry import Address
+from email.errors import HeaderParseError
+import warnings
 import pandas as pd
 from .email_sender import validate_recipient_address
 
@@ -11,6 +14,7 @@ def now_iso():
 class Database:
     def __init__(self, db_path="data/lead_assistant.db"):
         self.db_path = str(db_path)
+        self.duplicate_warnings = []
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
@@ -38,15 +42,153 @@ class Database:
             }
             if "sent_at" not in draft_columns:
                 conn.execute("ALTER TABLE draft_messages ADD COLUMN sent_at TEXT")
+            if "response_id" not in draft_columns:
+                conn.execute("ALTER TABLE draft_messages ADD COLUMN response_id TEXT")
+        self.remove_duplicate_entries()
+        self._create_duplicate_prevention_indexes()
+
+    def _warn_duplicate(self, entity, kept_id, removed_id=None):
+        if removed_id is None:
+            message = f"Duplicate {entity} detected. Existing record #{kept_id} was reused; no duplicate was inserted."
+        else:
+            message = f"Duplicate {entity} entries detected. Record #{removed_id} was removed; record #{kept_id} was kept."
+        self.duplicate_warnings.append(message)
+        warnings.warn(message, UserWarning)
+
+    def consume_duplicate_warnings(self):
+        warnings_list = list(self.duplicate_warnings)
+        self.duplicate_warnings.clear()
+        return warnings_list
+
+    def remove_duplicate_entries(self):
+        removed = {
+            "leads": 0,
+            "interactions": 0,
+            "programme_facts": 0,
+            "message_templates": 0,
+            "draft_messages": 0,
+            "audit_logs": 0,
+        }
+        with self.connect() as conn:
+            lead_groups = {}
+            for row in conn.execute(
+                "SELECT lead_id,full_name,email,programme_interest FROM leads ORDER BY lead_id"
+            ):
+                key = (
+                    str(row["full_name"] or "").strip().lower(),
+                    str(row["programme_interest"] or "").strip().lower(),
+                    str(row["email"] or "").strip().lower(),
+                )
+                lead_groups.setdefault(key, []).append(row["lead_id"])
+            for ids in lead_groups.values():
+                if len(ids) > 1:
+                    kept = ids[0]
+                    for duplicate_id in ids[1:]:
+                        conn.execute("UPDATE interactions SET lead_id=? WHERE lead_id=?", (kept, duplicate_id))
+                        conn.execute("UPDATE draft_messages SET lead_id=? WHERE lead_id=?", (kept, duplicate_id))
+                        conn.execute("UPDATE audit_logs SET lead_id=? WHERE lead_id=?", (kept, duplicate_id))
+                        conn.execute("DELETE FROM leads WHERE lead_id=?", (duplicate_id,))
+                        removed["leads"] += 1
+                        self._warn_duplicate("lead", kept, duplicate_id)
+
+            def remove_duplicate_rows(table, id_column, columns, name):
+                groups = {}
+                for row in conn.execute(
+                    f"SELECT {id_column},{','.join(columns)} FROM {table} ORDER BY {id_column}"
+                ):
+                    key = tuple(str(row[column] or "").strip().lower() for column in columns)
+                    groups.setdefault(key, []).append(row[id_column])
+                for ids in groups.values():
+                    if len(ids) > 1:
+                        kept = ids[0]
+                        for duplicate_id in ids[1:]:
+                            conn.execute(
+                                f"DELETE FROM {table} WHERE {id_column}=?",
+                                (duplicate_id,),
+                            )
+                            removed[name] += 1
+                            self._warn_duplicate(name.replace("_", " "), kept, duplicate_id)
+
+            remove_duplicate_rows(
+                "interactions", "interaction_id",
+                ["lead_id", "channel", "direction", "message", "occurred_at"],
+                "interactions",
+            )
+            remove_duplicate_rows(
+                "programme_facts", "fact_id",
+                ["programme_name", "fact_category", "fact_text", "is_approved"],
+                "programme_facts",
+            )
+            remove_duplicate_rows(
+                "message_templates", "template_id",
+                ["channel", "template_name", "template_text", "version"],
+                "message_templates",
+            )
+            remove_duplicate_rows(
+                "draft_messages", "draft_id",
+                ["lead_id", "channel", "subject", "message_body", "nlp_result_json",
+                 "fact_ids_json", "provider", "model", "prompt_version", "response_id"],
+                "draft_messages",
+            )
+            remove_duplicate_rows(
+                "audit_logs", "audit_id",
+                ["lead_id", "draft_id", "action", "details_json", "created_at"],
+                "audit_logs",
+            )
+        return removed
+
+    def _create_duplicate_prevention_indexes(self):
+        with self.connect() as conn:
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_identity
+                   ON leads(lower(trim(full_name)),lower(trim(programme_interest)),
+                           lower(trim(COALESCE(email,''))))"""
+            )
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_interactions_identity
+                   ON interactions(lead_id,lower(trim(channel)),
+                           lower(trim(direction)),lower(trim(message)),trim(occurred_at))"""
+            )
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_programme_facts_identity
+                   ON programme_facts(lower(trim(programme_name)),
+                           lower(trim(fact_category)),lower(trim(fact_text)),is_approved)"""
+            )
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_message_templates_identity
+                   ON message_templates(lower(trim(channel)),lower(trim(template_name)),
+                           trim(template_text),trim(version))"""
+            )
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_draft_messages_response
+                   ON draft_messages(response_id) WHERE response_id IS NOT NULL"""
+            )
 
     def add_lead(self, full_name, email, phone, programme_interest, source="Sample"):
         name, programme = (full_name or "").strip(), (programme_interest or "").strip()
         if not name or not programme:
             raise ValueError("Lead name and programme interest are required.")
-        if email and "@" not in email:
-            raise ValueError("Please enter a valid email address.")
+        normalized_email = str(email or "").strip().lower()
+        if email:
+            try:
+                parsed_email = Address(addr_spec=email.strip())
+                if not parsed_email.username or not parsed_email.domain:
+                    raise ValueError
+            except (ValueError, HeaderParseError) as exc:
+                raise ValueError("Please enter a valid email address.") from exc
         stamp = now_iso()
         with self.connect() as conn:
+            existing = conn.execute(
+                """SELECT lead_id FROM leads
+                   WHERE lower(trim(full_name))=?
+                     AND lower(trim(programme_interest))=?
+                     AND lower(trim(COALESCE(email,'')))=?""",
+                (name.lower(), programme.lower(), normalized_email),
+            ).fetchone()
+            if existing:
+                lead_id = existing["lead_id"]
+                self._warn_duplicate("lead", lead_id)
+                return lead_id
             cur = conn.execute(
                 """INSERT INTO leads(full_name,email,phone,programme_interest,source,status,created_at,updated_at)
                    VALUES(?,?,?,?,?,'New',?,?)""",
@@ -59,18 +201,42 @@ class Database:
     def add_interaction(self, lead_id, channel, message, direction="Inbound", occurred_at=None):
         if not str(message or "").strip():
             raise ValueError("Interaction message cannot be empty.")
-        if channel not in {"Email", "WhatsApp", "Call", "Web"}:
+        channel_map = {
+            "email": "Email",
+            "whatsapp": "WhatsApp",
+            "call": "Call",
+            "web": "Web",
+        }
+        normalized_channel = channel_map.get(str(channel).strip().lower())
+        if normalized_channel is None:
             raise ValueError("Unsupported channel.")
-        if direction not in {"Inbound", "Outbound"}:
+        normalized_direction = str(direction).strip().title()
+        if normalized_channel not in {"Email", "WhatsApp", "Call", "Web"}:
+            raise ValueError("Unsupported channel.")
+        if normalized_direction not in {"Inbound", "Outbound"}:
             raise ValueError("Direction must be Inbound or Outbound.")
         stamp = now_iso()
+        normalized_message = str(message or "").strip()
+        normalized_occurred_at = occurred_at or stamp
         with self.connect() as conn:
             if not conn.execute("SELECT 1 FROM leads WHERE lead_id=?", (lead_id,)).fetchone():
                 raise LookupError("Lead not found.")
+            existing = conn.execute(
+                """SELECT interaction_id FROM interactions
+                   WHERE lead_id=? AND lower(trim(channel))=?
+                     AND lower(trim(direction))=? AND lower(trim(message))=?
+                     AND trim(occurred_at)=?""",
+                (lead_id, normalized_channel.lower(), normalized_direction.lower(),
+                 normalized_message.lower(), normalized_occurred_at),
+            ).fetchone()
+            if existing:
+                interaction_id = existing["interaction_id"]
+                self._warn_duplicate("interaction", interaction_id)
+                return interaction_id
             cur = conn.execute(
                 """INSERT INTO interactions(lead_id,channel,direction,message,occurred_at,created_at)
                    VALUES(?,?,?,?,?,?)""",
-                (lead_id, channel, direction, message.strip(), occurred_at or stamp, stamp))
+                (lead_id, normalized_channel, normalized_direction, normalized_message, normalized_occurred_at, stamp))
             self.audit(lead_id, None, "INTERACTION_ADDED",
                        {"interaction_id": cur.lastrowid, "channel": channel}, conn)
             return cur.lastrowid
@@ -78,11 +244,27 @@ class Database:
     def add_fact(self, programme_name, category, fact_text, approved=True):
         if not all(str(x or "").strip() for x in (programme_name, category, fact_text)):
             raise ValueError("Programme, category and fact text are required.")
+        normalized_programme = str(programme_name).strip()
+        normalized_category = str(category).strip()
+        normalized_fact = str(fact_text).strip()
         with self.connect() as conn:
+            existing = conn.execute(
+                """SELECT fact_id FROM programme_facts
+                   WHERE lower(trim(programme_name))=?
+                     AND lower(trim(fact_category))=?
+                     AND lower(trim(fact_text))=?
+                     AND is_approved=?""",
+                (normalized_programme.lower(), normalized_category.lower(),
+                 normalized_fact.lower(), int(approved)),
+            ).fetchone()
+            if existing:
+                fact_id = existing["fact_id"]
+                self._warn_duplicate("programme fact", fact_id)
+                return fact_id
             cur = conn.execute(
                 """INSERT INTO programme_facts(programme_name,fact_category,fact_text,is_approved,created_at)
                    VALUES(?,?,?,?,?)""",
-                (programme_name.strip(), category.strip(), fact_text.strip(), int(approved), now_iso()))
+                (normalized_programme, normalized_category, normalized_fact, int(approved), now_iso()))
             fact_id = cur.lastrowid
             self.audit(
                 None,
@@ -122,18 +304,22 @@ class Database:
             return [dict(r) for r in rows]
 
     def save_draft(self, lead_id, channel, subject, body, nlp_result, fact_ids,
-                   provider, model, prompt_version):
+                   provider, model, prompt_version, response_id=None):
         if channel not in {"Email", "WhatsApp"} or not body.strip():
             raise ValueError("A valid channel and non-empty draft body are required.")
+        if channel == "WhatsApp" and str(subject or "").strip():
+            raise ValueError("A WhatsApp draft subject must be empty.")
+        if channel == "Email" and ("\r" in str(subject or "") or "\n" in str(subject or "")):
+            raise ValueError("The email subject cannot contain line breaks.")
         with self.connect() as conn:
             cur = conn.execute(
                 """INSERT INTO draft_messages
                 (lead_id,channel,subject,message_body,nlp_stage,nlp_result_json,fact_ids_json,
-                 provider,model,prompt_version,status,created_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,'Pending Approval',?)""",
+                 provider,model,prompt_version,response_id,status,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,'Pending Approval',?)""",
                 (lead_id, channel, subject, body, nlp_result.get("stage"),
                  json.dumps(nlp_result), json.dumps(fact_ids), provider, model,
-                 prompt_version, now_iso()))
+                 prompt_version, response_id, now_iso()))
             draft_id = cur.lastrowid
             self.audit(lead_id, draft_id, "DRAFT_CREATED",
                        {"channel": channel, "provider": provider, "model": model}, conn)
