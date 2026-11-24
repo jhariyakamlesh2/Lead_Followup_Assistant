@@ -64,3 +64,16 @@ def test_generator_failure_does_not_persist_a_draft(tmp_path):
         generate_and_save_draft(db, lead_id, "Email", FailingGenerator())
 
     assert db.get_drafts().empty
+
+
+def test_missing_approved_facts_blocks_draft_before_generation(tmp_path):
+    db = Database(tmp_path / "test.db")
+    lead_id = db.add_lead("Demo Lead", "", "", "Unknown Programme")
+    db.add_interaction(lead_id, "Email", "Tell me about this programme.")
+    generator = FakeGenerator(1)
+
+    with pytest.raises(ValueError, match="No approved programme facts"):
+        generate_and_save_draft(db, lead_id, "Email", generator)
+
+    assert generator.received_history is None
+    assert db.get_drafts().empty

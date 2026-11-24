@@ -38,6 +38,9 @@ The tests are offline and use a fake generator where needed. Expected/actual out
 | T26 | Exit a database connection context | SQLite connection is closed | Pass |
 | T27 | Change the selected draft channel | A draft from the previous context is cleared | Pass |
 | T28 | Provider fails before returning a draft | No draft is persisted | Pass |
+| T29 | Learning-interest text mentions AI Engineering | Stage is Interested and AI Engineering preference is detected | Pass |
+| T30 | AI Engineering demo seed is initialized | Exactly five approved synthetic AI Engineering facts are available | Pass |
+| T31 | Programme has no approved facts | Generator is not called and no draft is persisted | Pass |
 
 For manual live verification, run one successful Anthropic draft and one configuration/API failure as described in `DEMO_SCRIPT.md`. Never add a real API key to test fixtures or evidence.
 

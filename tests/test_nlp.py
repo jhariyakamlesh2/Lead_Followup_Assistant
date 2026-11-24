@@ -29,3 +29,10 @@ def test_outbound_history_marks_only_referenced_question_topic_as_addressed():
 def test_plain_string_messages_are_treated_as_inbound():
     r=analyze_conversation(["Please share details about weekend sessions."])
     assert r["unanswered_topics"]==["schedule"]
+
+def test_learning_interest_is_classified_as_interested():
+    r=analyze_conversation([
+        "He wants to learn AI Engineering in our institute.",
+    ])
+    assert r["stage"]=="Interested"
+    assert "ai_engineering" in r["preferences"]

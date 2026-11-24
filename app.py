@@ -391,7 +391,24 @@ elif page=="Generate Draft":
                             st.badge(topic.title(), color=color)
                 else:
                     st.caption(f"No {label.lower()} detected.")
-        if st.button("Generate AI draft",type="primary"):
+        approved_facts = (
+            db.get_approved_facts(
+                str(leads.loc[leads.lead_id == lid, "programme_interest"].iloc[0])
+            )
+            if hasattr(db, "get_approved_facts")
+            else []
+        )
+        if not approved_facts:
+            st.warning(
+                "No approved facts are configured for this programme. "
+                "Add trainer-approved facts under **Programme Facts** before generating a draft."
+            )
+        if st.button(
+            "Generate AI draft",
+            type="primary",
+            disabled=not approved_facts,
+            help=None if approved_facts else "Add approved programme facts before generating.",
+        ):
             st.session_state.pop("latest", None)
             st.session_state.pop("latest_context", None)
             try:

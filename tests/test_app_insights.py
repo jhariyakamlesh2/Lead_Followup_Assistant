@@ -36,6 +36,9 @@ class ConversationDatabase:
             }]
         )
 
+    def get_approved_facts(self, _programme):
+        return []
+
 
 def test_conversation_insights_show_readable_signals():
     app_path = Path(__file__).resolve().parents[1] / "app.py"

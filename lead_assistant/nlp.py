@@ -12,7 +12,8 @@ PREFERENCE_PATTERNS = {
  "weekend_sessions": [r"\bweekends?\b", r"\bsaturday\b", r"\bsunday\b"],
  "beginner_friendly": [r"\bbeginner\b", r"\bno experience\b", r"\bnew to\b"],
  "online_learning": [r"\bonline\b", r"\bremote\b", r"\bvirtual\b"],
- "career_change": [r"\bcareer change\b", r"\bswitch careers\b", r"\bchange my career\b"]
+ "career_change": [r"\bcareer change\b", r"\bswitch careers\b", r"\bchange my career\b"],
+ "ai_engineering": [r"\bai engineering\b", r"\bartificial intelligence\b", r"\bmachine learning\b", r"\blearn ai\b"]
 }
 REQUEST_PATTERN = re.compile(
     r"\b(please share|share details|tell me|need to know|still need|"
@@ -63,7 +64,18 @@ def analyze_conversation(messages):
         stage = "Ready to Enroll"
     elif requested_topics or any(x in text for x in ["fee", "fees", "cost", "payment", "placement", "recording"]):
         stage = "Considering"
-    elif any(x in text for x in ["interested", "tell me", "more information", "details"]):
+    elif any(
+        x in text
+        for x in [
+            "interested",
+            "want to learn",
+            "wants to learn",
+            "looking to learn",
+            "tell me",
+            "more information",
+            "details",
+        ]
+    ):
         stage = "Interested"
     else:
         stage = "New Enquiry"

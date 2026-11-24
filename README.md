@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # LeadPilot AI
 ### Project 029 · Lead Follow-up Email & WhatsApp Draft Assistant
 
@@ -87,7 +86,7 @@ Sign in with user ID `admin` and password `admin@123`. This is a shared, hardcod
 python -m pytest -v
 ```
 
-Tests use fake Anthropic and SMTP transports and do not require keys, network access or paid API usage. They cover validation, NLP, SQLite, the integrated workflow, Anthropic configuration failure and response validation. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for case-by-case expected and actual results.
+Tests use fake Anthropic and SMTP transports and do not require keys, network access or paid API usage. They cover 50 automated normal and edge cases, including validation, NLP, SQLite, AI Engineering fact seeding, missing-fact blocking, the integrated workflow, Anthropic configuration failure and response validation. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for case-by-case expected and actual results.
 
 ## Architecture
 
@@ -146,11 +145,7 @@ tests/                       Offline automated tests
 - [x] Anthropic API integration, configurable model and timeout/error handling
 - [x] SQLite schema, sample records, CRUD, audit and human review
 - [x] Prompt pack, workflow diagram, sample scenario and setup guide
-- [x] At least 10 automated edge/normal-case tests with actual results
+- [x] 50 automated edge/normal-case tests with actual results
+- [x] GitHub repository: https://github.com/jhariyakamlesh2/Project_029_Lead_Followup_Assistant
 - [ ] Record the live walkthrough locally (one normal flow and one API-configuration failure); see [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
-- [ ] Add GitHub/demo URLs at submission time if those are part of the approved setup
-
-=======
-# Project_029_Lead_Followup_Assistant
-Project_029_Lead_Followup_Assistant
->>>>>>> b11920a804a4e381599381696958c52c28c75b21
+- [ ] Add a deployed/demo URL if a public deployment is approved and available

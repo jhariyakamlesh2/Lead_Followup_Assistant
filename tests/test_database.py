@@ -59,3 +59,13 @@ def test_database_connection_closes_after_context_exit(tmp_path):
 
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         connection.execute("SELECT 1")
+
+
+def test_demo_seed_adds_approved_ai_engineering_facts(tmp_path):
+    db = Database(tmp_path / "test.db")
+    db.seed_sample_data()
+
+    facts = db.get_approved_facts("AI Engineering")
+
+    assert len(facts) == 5
+    assert all(fact["fact_text"].strip() for fact in facts)

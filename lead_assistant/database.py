@@ -325,13 +325,28 @@ class Database:
                 "I prefer weekend sessions. Please share details about fees and placement support.")
             self.add_interaction(lid, "Email",
                 "Are classes recorded? I still need to know the exact fee.")
-        if has_facts:
+        if not has_facts:
+            for category, fact in [
+                ("Audience", "The programme is designed for beginners and career changers."),
+                ("Schedule", "Live online sessions are available on weekends."),
+                ("Learning support", "Learners receive guided practice exercises and mentor-led doubt sessions."),
+                ("Recording", "Recording availability must be confirmed by the programme team before promising access."),
+                ("Fees", "The current fee is not present in the approved sample knowledge base; ask the programme team to confirm.")
+            ]:
+                self.add_fact("Data Analytics Career Programme", category, fact)
+
+        with self.connect() as conn:
+            has_ai_facts = conn.execute(
+                "SELECT 1 FROM programme_facts WHERE programme_name=? LIMIT 1",
+                ("AI Engineering",),
+            ).fetchone()
+        if has_ai_facts:
             return
         for category, fact in [
-            ("Audience", "The programme is designed for beginners and career changers."),
-            ("Schedule", "Live online sessions are available on weekends."),
-            ("Learning support", "Learners receive guided practice exercises and mentor-led doubt sessions."),
+            ("Audience", "The AI Engineering programme is suitable for learners who want to build practical AI engineering foundations."),
+            ("Schedule", "The exact live-session schedule must be confirmed by the programme team."),
+            ("Learning support", "Learners receive guided practice and mentor-led doubt sessions."),
             ("Recording", "Recording availability must be confirmed by the programme team before promising access."),
-            ("Fees", "The current fee is not present in the approved sample knowledge base; ask the programme team to confirm.")
+            ("Fees", "The current fee is not present in the approved sample knowledge base; ask the programme team to confirm."),
         ]:
-            self.add_fact("Data Analytics Career Programme", category, fact)
+            self.add_fact("AI Engineering", category, fact)
