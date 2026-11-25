@@ -1,7 +1,19 @@
 import sqlite3
 
 import pytest
-from lead_assistant.database import Database
+from lead_assistant.database import Database, _ConnectionAdapter
+
+
+def test_postgres_connection_adapter_translates_placeholders():
+    class FakeConnection:
+        def execute(self, query, parameters):
+            return query, parameters
+
+    adapter = _ConnectionAdapter(FakeConnection(), is_postgres=True)
+
+    assert adapter.execute(
+        "SELECT * FROM leads WHERE lead_id=? AND status=?", (3, "New")
+    ) == ("SELECT * FROM leads WHERE lead_id=%s AND status=%s", (3, "New"))
 
 
 def test_crud_and_review(tmp_path):
@@ -88,6 +100,27 @@ def test_demo_seed_adds_approved_ai_engineering_facts(tmp_path):
 
     assert len(facts) == 5
     assert all(fact["fact_text"].strip() for fact in facts)
+
+
+def test_demo_seed_adds_new_course_facts_idempotently(tmp_path):
+    db = Database(tmp_path / "test.db")
+    programmes = [
+        "Artificial Intelligence & Machine Learning",
+        "Data Science & Analytics",
+        "Cybersecurity & Cloud/DevOps",
+    ]
+
+    db.seed_sample_data()
+    initial_facts = {
+        programme: db.get_approved_facts(programme) for programme in programmes
+    }
+    db.seed_sample_data()
+
+    for programme in programmes:
+        facts = db.get_approved_facts(programme)
+        assert len(facts) == 5
+        assert len(facts) == len(initial_facts[programme])
+        assert all(fact["fact_text"].strip() for fact in facts)
 
 
 def test_duplicate_lead_is_reused_and_warned(tmp_path):

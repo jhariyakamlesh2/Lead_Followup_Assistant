@@ -6,7 +6,7 @@ Run from the project root:
 python -m pytest -v
 ```
 
-The tests are offline and use fake Anthropic and SMTP transports where needed. The latest local run contains **50 passing automated tests** across normal and edge scenarios. A live Anthropic request is deliberately not part of automated tests because it requires private credentials and may incur API charges.
+The tests are offline and use fake Anthropic and SMTP transports where needed. The latest local run contains **65 passing automated tests** across normal and edge scenarios. A live Anthropic request is deliberately not part of automated tests because it requires private credentials and may incur API charges.
 
 | ID | Input / scenario | Expected | Actual |
 |---|---|---|---|
@@ -48,6 +48,9 @@ The tests are offline and use fake Anthropic and SMTP transports where needed. T
 | T36 | Duplicate interaction is added again | Existing interaction is reused and a warning is issued | Pass |
 | T37 | Duplicate approved fact is added again | Existing fact is reused and a warning is issued | Pass |
 | T38 | Legacy database contains duplicate lead and interaction rows | Duplicates are merged/deleted with warnings during initialization | Pass |
+| T39 | Initialize demo seed twice with the three additional programmes | Five approved facts are available per programme and no duplicates are added | Pass |
+| T40 | PostgreSQL connection adapter receives SQLite-style placeholders | Placeholders are translated for psycopg | Pass |
+| T41 | PostgreSQL URL is supplied as environment configuration | URL is read for persistent database selection | Pass |
 
 For manual live verification, run one successful Anthropic draft and one configuration/API failure as described in `DEMO_SCRIPT.md`. Never add a real API key to test fixtures or evidence.
 

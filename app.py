@@ -42,12 +42,19 @@ if not st.session_state["authenticated"]:
 
 @st.cache_resource
 def get_db():
-    db = Database(settings.database_path)
+    database_url = getattr(settings, "database_url", "")
+    db = Database(database_url or settings.database_path)
     db.seed_sample_data()
     return db
 
 
 db = get_db()
+PROGRAMME_OPTIONS = [
+    "Data Analytics Career Programme",
+    "Artificial Intelligence & Machine Learning",
+    "Data Science & Analytics",
+    "Cybersecurity & Cloud/DevOps",
+]
 if hasattr(db, "consume_duplicate_warnings"):
     for duplicate_warning in db.consume_duplicate_warnings():
         st.warning(duplicate_warning)
@@ -307,7 +314,7 @@ elif page=="Lead Management":
     with st.form("lead"):
         x,y=st.columns(2)
         name=x.text_input("Full name *"); email=y.text_input("Email")
-        phone=x.text_input("Phone"); programme=y.text_input("Programme interest *",value="Data Analytics Career Programme")
+        phone=x.text_input("Phone"); programme=y.selectbox("Programme interest *",PROGRAMME_OPTIONS)
         if st.form_submit_button("Save lead",type="primary"):
             try:
                 lead_id = db.add_lead(name,email,phone,programme)
@@ -618,7 +625,7 @@ elif page=="Programme Facts":
     st.subheader("Approved programme knowledge base")
     st.caption("Only approved facts are passed to the LLM. Use verified, trainer-approved information.")
     with st.form("fact"):
-        prog=st.text_input("Programme",value="Data Analytics Career Programme")
+        prog=st.selectbox("Programme",PROGRAMME_OPTIONS)
         cat=st.selectbox("Category",["Audience","Schedule","Fees","Duration","Eligibility","Learning support","Placement","Recording","Other"])
         fact=st.text_area("Approved fact")
         if st.form_submit_button("Add approved fact"):
@@ -630,6 +637,5 @@ elif page=="Programme Facts":
                 st.success(f"Approved fact #{fact_id} saved.")
                 st.rerun()
             except Exception as e: st.error(str(e))
-    with db.connect() as conn:
-        facts=pd.read_sql_query("SELECT * FROM programme_facts ORDER BY programme_name,fact_id",conn)
+    facts = db.get_programme_facts()
     st.dataframe(facts,width="stretch",hide_index=True)

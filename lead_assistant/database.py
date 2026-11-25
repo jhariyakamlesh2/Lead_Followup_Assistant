@@ -8,22 +8,56 @@ import warnings
 import pandas as pd
 from .email_sender import validate_recipient_address
 
+
+class _ConnectionAdapter:
+    def __init__(self, connection, is_postgres):
+        self._connection = connection
+        self._is_postgres = is_postgres
+
+    def execute(self, query, parameters=()):
+        if self._is_postgres:
+            query = query.replace("?", "%s")
+        return self._connection.execute(query, parameters)
+
+    def executescript(self, script):
+        return self._connection.executescript(script)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
 def now_iso():
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
 
 class Database:
     def __init__(self, db_path="data/lead_assistant.db"):
         self.db_path = str(db_path)
+        self.is_postgres = self.db_path.startswith(("postgres://", "postgresql://"))
+        if self.db_path.startswith("postgres://"):
+            self.db_path = "postgresql://" + self.db_path[len("postgres://"):]
         self.duplicate_warnings = []
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        if not self.is_postgres:
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
     @contextmanager
     def connect(self):
-        conn = sqlite3.connect(self.db_path)
+        if self.is_postgres:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            raw_conn = psycopg.connect(
+                self.db_path,
+                row_factory=dict_row,
+                prepare_threshold=None,
+            )
+        else:
+            raw_conn = sqlite3.connect(self.db_path)
+            raw_conn.row_factory = sqlite3.Row
+            raw_conn.execute("PRAGMA foreign_keys=ON")
+        conn = _ConnectionAdapter(raw_conn, self.is_postgres)
         try:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys=ON")
             yield conn
             conn.commit()
         except Exception:
@@ -33,19 +67,58 @@ class Database:
             conn.close()
 
     def initialize(self):
-        schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
+        schema_name = "schema_postgres.sql" if self.is_postgres else "schema.sql"
+        schema_path = Path(__file__).resolve().parent.parent / schema_name
         schema = schema_path.read_text(encoding="utf-8")
         with self.connect() as conn:
-            conn.executescript(schema)
-            draft_columns = {
-                row["name"] for row in conn.execute("PRAGMA table_info(draft_messages)")
-            }
-            if "sent_at" not in draft_columns:
-                conn.execute("ALTER TABLE draft_messages ADD COLUMN sent_at TEXT")
-            if "response_id" not in draft_columns:
-                conn.execute("ALTER TABLE draft_messages ADD COLUMN response_id TEXT")
+            if self.is_postgres:
+                for statement in schema.split(";"):
+                    if statement.strip():
+                        conn.execute(statement)
+                draft_columns = {
+                    row["column_name"]
+                    for row in conn.execute(
+                        """SELECT column_name FROM information_schema.columns
+                           WHERE table_schema=current_schema()
+                             AND table_name='draft_messages'"""
+                    )
+                }
+                if "sent_at" not in draft_columns:
+                    conn.execute(
+                        "ALTER TABLE draft_messages ADD COLUMN sent_at TEXT"
+                    )
+                if "response_id" not in draft_columns:
+                    conn.execute(
+                        "ALTER TABLE draft_messages ADD COLUMN response_id TEXT"
+                    )
+            else:
+                conn.executescript(schema)
+                draft_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(draft_messages)")
+                }
+                if "sent_at" not in draft_columns:
+                    conn.execute("ALTER TABLE draft_messages ADD COLUMN sent_at TEXT")
+                if "response_id" not in draft_columns:
+                    conn.execute("ALTER TABLE draft_messages ADD COLUMN response_id TEXT")
         self.remove_duplicate_entries()
         self._create_duplicate_prevention_indexes()
+
+    def _insert_id(self, conn, query, parameters, id_column):
+        if self.is_postgres:
+            row = conn.execute(
+                f"{query} RETURNING {id_column}", parameters
+            ).fetchone()
+            return row[id_column]
+        return conn.execute(query, parameters).lastrowid
+
+    @staticmethod
+    def _read_dataframe(conn, query, parameters=()):
+        cursor = conn.execute(query, parameters)
+        columns = [description[0] for description in cursor.description]
+        return pd.DataFrame.from_records(
+            [dict(row) for row in cursor.fetchall()],
+            columns=columns,
+        )
 
     def _warn_duplicate(self, entity, kept_id, removed_id=None):
         if removed_id is None:
@@ -189,12 +262,14 @@ class Database:
                 lead_id = existing["lead_id"]
                 self._warn_duplicate("lead", lead_id)
                 return lead_id
-            cur = conn.execute(
+            lead_id = self._insert_id(
+                conn,
                 """INSERT INTO leads(full_name,email,phone,programme_interest,source,status,created_at,updated_at)
                    VALUES(?,?,?,?,?,'New',?,?)""",
                 (name, email.strip() if email else None, phone.strip() if phone else None,
-                 programme, source, stamp, stamp))
-            lead_id = cur.lastrowid
+                 programme, source, stamp, stamp),
+                "lead_id",
+            )
             self.audit(lead_id, None, "LEAD_CREATED", {"programme": programme}, conn)
             return lead_id
 
@@ -233,13 +308,16 @@ class Database:
                 interaction_id = existing["interaction_id"]
                 self._warn_duplicate("interaction", interaction_id)
                 return interaction_id
-            cur = conn.execute(
+            interaction_id = self._insert_id(
+                conn,
                 """INSERT INTO interactions(lead_id,channel,direction,message,occurred_at,created_at)
                    VALUES(?,?,?,?,?,?)""",
-                (lead_id, normalized_channel, normalized_direction, normalized_message, normalized_occurred_at, stamp))
+                (lead_id, normalized_channel, normalized_direction, normalized_message, normalized_occurred_at, stamp),
+                "interaction_id",
+            )
             self.audit(lead_id, None, "INTERACTION_ADDED",
-                       {"interaction_id": cur.lastrowid, "channel": channel}, conn)
-            return cur.lastrowid
+                       {"interaction_id": interaction_id, "channel": channel}, conn)
+            return interaction_id
 
     def add_fact(self, programme_name, category, fact_text, approved=True):
         if not all(str(x or "").strip() for x in (programme_name, category, fact_text)):
@@ -261,11 +339,13 @@ class Database:
                 fact_id = existing["fact_id"]
                 self._warn_duplicate("programme fact", fact_id)
                 return fact_id
-            cur = conn.execute(
+            fact_id = self._insert_id(
+                conn,
                 """INSERT INTO programme_facts(programme_name,fact_category,fact_text,is_approved,created_at)
                    VALUES(?,?,?,?,?)""",
-                (normalized_programme, normalized_category, normalized_fact, int(approved), now_iso()))
-            fact_id = cur.lastrowid
+                (normalized_programme, normalized_category, normalized_fact, int(approved), now_iso()),
+                "fact_id",
+            )
             self.audit(
                 None,
                 None,
@@ -282,7 +362,9 @@ class Database:
 
     def get_leads(self):
         with self.connect() as conn:
-            return pd.read_sql_query("SELECT * FROM leads ORDER BY updated_at DESC", conn)
+            return self._read_dataframe(
+                conn, "SELECT * FROM leads ORDER BY updated_at DESC"
+            )
 
     def get_lead(self, lead_id):
         with self.connect() as conn:
@@ -291,9 +373,11 @@ class Database:
 
     def get_history(self, lead_id):
         with self.connect() as conn:
-            return pd.read_sql_query(
+            return self._read_dataframe(
+                conn,
                 "SELECT * FROM interactions WHERE lead_id=? ORDER BY occurred_at",
-                conn, params=(lead_id,))
+                (lead_id,),
+            )
 
     def get_approved_facts(self, programme_name):
         with self.connect() as conn:
@@ -302,6 +386,13 @@ class Database:
                    WHERE is_approved=1 AND lower(programme_name)=lower(?) ORDER BY fact_id""",
                 (programme_name,)).fetchall()
             return [dict(r) for r in rows]
+
+    def get_programme_facts(self):
+        with self.connect() as conn:
+            return self._read_dataframe(
+                conn,
+                "SELECT * FROM programme_facts ORDER BY programme_name,fact_id",
+            )
 
     def save_draft(self, lead_id, channel, subject, body, nlp_result, fact_ids,
                    provider, model, prompt_version, response_id=None):
@@ -312,15 +403,17 @@ class Database:
         if channel == "Email" and ("\r" in str(subject or "") or "\n" in str(subject or "")):
             raise ValueError("The email subject cannot contain line breaks.")
         with self.connect() as conn:
-            cur = conn.execute(
+            draft_id = self._insert_id(
+                conn,
                 """INSERT INTO draft_messages
                 (lead_id,channel,subject,message_body,nlp_stage,nlp_result_json,fact_ids_json,
                  provider,model,prompt_version,response_id,status,created_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,'Pending Approval',?)""",
                 (lead_id, channel, subject, body, nlp_result.get("stage"),
                  json.dumps(nlp_result), json.dumps(fact_ids), provider, model,
-                 prompt_version, response_id, now_iso()))
-            draft_id = cur.lastrowid
+                 prompt_version, response_id, now_iso()),
+                "draft_id",
+            )
             self.audit(lead_id, draft_id, "DRAFT_CREATED",
                        {"channel": channel, "provider": provider, "model": model}, conn)
             return draft_id
@@ -468,10 +561,11 @@ class Database:
 
     def get_drafts(self):
         with self.connect() as conn:
-            return pd.read_sql_query(
+            return self._read_dataframe(
+                conn,
                 """SELECT d.*,l.full_name,l.email,l.source,l.programme_interest
                    FROM draft_messages d
-                   JOIN leads l ON d.lead_id=l.lead_id ORDER BY d.created_at DESC""", conn)
+                   JOIN leads l ON d.lead_id=l.lead_id ORDER BY d.created_at DESC""")
 
     def audit(self, lead_id, draft_id, action, details, conn):
         conn.execute(
@@ -526,13 +620,34 @@ class Database:
                 "SELECT 1 FROM programme_facts WHERE programme_name=? LIMIT 1",
                 ("AI Engineering",),
             ).fetchone()
-        if has_ai_facts:
-            return
-        for category, fact in [
-            ("Audience", "The AI Engineering programme is suitable for learners who want to build practical AI engineering foundations."),
-            ("Schedule", "The exact live-session schedule must be confirmed by the programme team."),
-            ("Learning support", "Learners receive guided practice and mentor-led doubt sessions."),
-            ("Recording", "Recording availability must be confirmed by the programme team before promising access."),
-            ("Fees", "The current fee is not present in the approved sample knowledge base; ask the programme team to confirm."),
-        ]:
-            self.add_fact("AI Engineering", category, fact)
+        if not has_ai_facts:
+            for category, fact in [
+                ("Audience", "The AI Engineering programme is suitable for learners who want to build practical AI engineering foundations."),
+                ("Schedule", "The exact live-session schedule must be confirmed by the programme team."),
+                ("Learning support", "Learners receive guided practice and mentor-led doubt sessions."),
+                ("Recording", "Recording availability must be confirmed by the programme team before promising access."),
+                ("Fees", "The current fee is not present in the approved sample knowledge base; ask the programme team to confirm."),
+            ]:
+                self.add_fact("AI Engineering", category, fact)
+
+        additional_programmes = {
+            "Artificial Intelligence & Machine Learning": "The course covers Artificial Intelligence and Machine Learning.",
+            "Data Science & Analytics": "The course covers Data Science and Analytics.",
+            "Cybersecurity & Cloud/DevOps": "The course covers Cybersecurity, Cloud and DevOps.",
+        }
+        for programme, focus_fact in additional_programmes.items():
+            with self.connect() as conn:
+                has_facts = conn.execute(
+                    "SELECT 1 FROM programme_facts WHERE programme_name=? LIMIT 1",
+                    (programme,),
+                ).fetchone()
+            if has_facts:
+                continue
+            for category, fact in [
+                ("Course focus", focus_fact),
+                ("Schedule", "The course schedule must be confirmed by the programme team."),
+                ("Learning support", "Course support details must be confirmed by the programme team."),
+                ("Recording", "Recording availability must be confirmed by the programme team before promising access."),
+                ("Fees", "The current course fee must be confirmed by the programme team."),
+            ]:
+                self.add_fact(programme, category, fact)

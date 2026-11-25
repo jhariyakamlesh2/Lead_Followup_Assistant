@@ -39,6 +39,7 @@ Edit `.env` with your own Anthropic key and, if needed, a model available to you
 ```env
 ANTHROPIC_API_KEY=your_anthropic_api_key
 ANTHROPIC_MODEL=claude-sonnet-4-5
+DATABASE_URL=
 DATABASE_PATH=data/lead_assistant.db
 SMTP_HOST=
 SMTP_PORT=587
@@ -49,6 +50,22 @@ SMTP_SECURITY=starttls
 ```
 
 Keep `.env` private. It is ignored by Git; do not paste keys into source code, issue reports, screenshots, or chat. Never commit the key. If the configured model is unavailable to your account, set `ANTHROPIC_MODEL` to an Anthropic model you can access.
+Relative `DATABASE_PATH` values are resolved from the project directory, regardless of the directory used to launch Streamlit. It is intended for local development; Streamlit Community Cloud's app filesystem is not durable across restarts.
+
+### Persistent storage on Streamlit Community Cloud
+
+Use Supabase PostgreSQL (or another persistent PostgreSQL provider) instead of the local SQLite file:
+
+1. Create a Supabase project and copy its PostgreSQL connection string from **Connect**. The transaction pooler connection string is suitable for hosted apps.
+2. In Streamlit Community Cloud, open the app's **Settings → Secrets** and add the connection string as TOML:
+
+   ```toml
+   DATABASE_URL = "postgresql://postgres.[project-ref]:[password]@[pooler-host]:6543/postgres?sslmode=require"
+   ```
+
+3. Save the secret and reboot/redeploy the app. The app creates its PostgreSQL schema automatically and uses it for leads, conversations, drafts, approved facts and audit records.
+
+Keep the connection string only in Streamlit Secrets; do not commit it. When `DATABASE_URL` is absent, the app uses local SQLite and displays a warning. Existing SQLite records are not copied automatically to PostgreSQL; export or migrate them before switching if that SQLite file is still available.
 
 For provider setup and safe retry guidance, see [docs/EMAIL_SENDING.md](docs/EMAIL_SENDING.md).
 
@@ -86,7 +103,7 @@ Sign in with user ID `admin` and password `admin@123`. This is a shared, hardcod
 python -m pytest -v
 ```
 
-Tests use fake Anthropic and SMTP transports and do not require keys, network access or paid API usage. They cover 57 automated normal and edge cases, including validation, NLP, SQLite, duplicate prevention and removal, AI Engineering fact seeding, missing-fact blocking, the integrated workflow, Anthropic configuration failure and response validation. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for case-by-case expected and actual results.
+Tests use fake Anthropic and SMTP transports and do not require keys, network access or paid API usage. They cover 65 automated normal and edge cases, including validation, NLP, SQLite, duplicate prevention and removal, approved programme fact seeding, PostgreSQL connection handling, missing-fact blocking, the integrated workflow, Anthropic configuration failure and response validation. See [docs/TEST_PLAN.md](docs/TEST_PLAN.md) for case-by-case expected and actual results.
 
 ## Architecture
 
@@ -146,7 +163,7 @@ tests/                       Offline automated tests
 - [x] Anthropic API integration, configurable model and timeout/error handling
 - [x] SQLite schema, sample records, CRUD, audit and human review
 - [x] Prompt pack, workflow diagram, sample scenario and setup guide
-- [x] 57 automated edge/normal-case tests with actual results
+- [x] 65 automated edge/normal-case tests with actual results
 - [x] GitHub repository: https://github.com/jhariyakamlesh2/Project_029_Lead_Followup_Assistant
 - [ ] Record the live walkthrough locally (one normal flow and one API-configuration failure); see [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
 - [ ] Add a deployed/demo URL if a public deployment is approved and available

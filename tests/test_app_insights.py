@@ -50,6 +50,9 @@ def test_conversation_insights_show_readable_signals():
         app.radio[0].set_value("Generate Draft").run()
 
     assert not app.exception
+    assert not any(
+        "Using local SQLite storage" in warning.value for warning in app.warning
+    )
     assert app.subheader[-1].value == "Conversation insights"
     assert next(metric.value for metric in app.metric if metric.label == "Stage") == "New Enquiry"
     captions = {caption.value for caption in app.caption}

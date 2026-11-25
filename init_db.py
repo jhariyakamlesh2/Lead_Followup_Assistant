@@ -16,8 +16,11 @@ if __name__ == "__main__":
     database_path = (
         Path("sample_data") / "lead_assistant_sample.db"
         if args.sample_output
-        else settings.database_path
+        else settings.database_url or settings.database_path
     )
     db = Database(database_path)
     db.seed_sample_data()
-    print(f"Database initialized: {database_path}")
+    if str(database_path).startswith(("postgres://", "postgresql://")):
+        print("Database initialized: configured PostgreSQL database")
+    else:
+        print(f"Database initialized: {database_path}")

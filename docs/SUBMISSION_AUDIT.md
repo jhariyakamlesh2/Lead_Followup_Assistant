@@ -16,7 +16,7 @@ Audited project scope: tracked source, configuration, documentation, assets, sch
 - [x] Explicit SMTP send action for approved email drafts
 - [x] Prompt pack and prompt-version notes
 - [x] Architecture, setup, privacy, demo and test documentation
-- [x] 57 automated tests covering normal, validation and failure scenarios
+- [x] 65 automated tests covering normal, validation and failure scenarios
 - [x] Duplicate lead, interaction, fact, template, draft and audit cleanup
 - [x] Synthetic data and no hard-coded API keys
 
