@@ -28,8 +28,9 @@ def test_malformed_review_notes_are_rejected():
     with pytest.raises(ValueError): validate_llm_result(x,FACTS)
 
 def test_missing_anthropic_key_fails_before_network_call():
-    with pytest.raises(ValueError,match="ANTHROPIC_API_KEY"):
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY") as error:
         AnthropicDraftGenerator("")
+    assert "Streamlit app secrets" in str(error.value)
 
 def test_anthropic_response_is_parsed_and_metadata_is_recorded():
     response=SimpleNamespace(

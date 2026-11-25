@@ -31,7 +31,10 @@ class LLMError(RuntimeError):
 class AnthropicDraftGenerator:
     def __init__(self, api_key, model="claude-sonnet-4-5", timeout=30):
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY is missing. Add it to your .env file.")
+            raise ValueError(
+                "ANTHROPIC_API_KEY is missing. Set it in your environment, .env file, "
+                "or Streamlit app secrets."
+            )
         try:
             from anthropic import Anthropic
         except ImportError as exc:
